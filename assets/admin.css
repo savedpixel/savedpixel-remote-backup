@@ -1,0 +1,68 @@
+/* Remote Backup admin compatibility layer.
+ * The page layout now comes from savedpixel-admin-preview.css.
+ * Keep only runtime-only UI that the shared preview stylesheet does not define.
+ */
+
+.rb-toast-stack {
+  position: fixed;
+  top: 46px;
+  right: 20px;
+  z-index: 100000;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(360px, calc(100vw - 32px));
+}
+
+.rb-toast {
+  position: relative;
+  padding: 14px 42px 14px 14px;
+  border-radius: 8px;
+  border-left: 4px solid var(--primary, #2271b1);
+  background: var(--surface, #ffffff);
+  color: var(--text, #1d2327);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
+}
+
+.rb-toast--success {
+  border-left-color: var(--success, #00a32a);
+}
+
+.rb-toast--warning {
+  border-left-color: var(--warning, #996800);
+}
+
+.rb-toast--error {
+  border-left-color: var(--danger, #d63638);
+}
+
+.rb-toast__body {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.rb-toast__close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted, #50575e);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.rb-toast__close:hover {
+  color: var(--text, #1d2327);
+}
+
+@media (max-width: 782px) {
+  .rb-toast-stack {
+    top: 32px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+  }
+}
