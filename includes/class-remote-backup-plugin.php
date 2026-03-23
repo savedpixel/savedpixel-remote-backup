@@ -39,8 +39,8 @@ class Remote_Backup_Plugin {
         $this->runner    = new Remote_Backup_Runner( $this->storage, $this->logger );
         $this->downloads = new Remote_Backup_Downloads( $this->storage );
         $this->scheduler = new Remote_Backup_Scheduler( $this->runner, $this->logger, $this->storage );
-        $this->api       = new Remote_Backup_Api( $this->storage, $this->scheduler );
         $this->admin     = new Remote_Backup_Admin( $this->storage, $this->runner, $this->downloads, $this->logger, $this->scheduler );
+        $this->api       = new Remote_Backup_Api( $this->storage, $this->scheduler, $this->admin );
     }
 
     public static function activate() {

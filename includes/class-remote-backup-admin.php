@@ -151,7 +151,7 @@ class Remote_Backup_Admin {
         return $this->set_backup_job_state( $job_id, array_merge( $state, $changes ) );
     }
 
-    private function create_backup_job( $scope, $remote_mode, array $folders ) {
+    private function create_backup_job( $scope, $remote_mode, array $folders, array $state_overrides = array(), array $payload_overrides = array() ) {
         $job_id = gmdate( 'Ymd-His' ) . '-' . wp_generate_password( 8, false, false );
         $state  = array(
             'status'      => 'queued',
@@ -165,13 +165,19 @@ class Remote_Backup_Admin {
             'total_size'  => 0,
             'error'       => null,
         );
+        $state  = array_merge( $state, $state_overrides );
 
         set_transient(
             $this->backup_job_payload_key( $job_id ),
-            array(
-                'scope'       => $scope,
-                'remote_mode' => $remote_mode,
-                'folders'     => array_values( $folders ),
+            array_merge(
+                array(
+                    'scope'         => $scope,
+                    'remote_mode'   => $remote_mode,
+                    'folders'       => array_values( $folders ),
+                    'context_label' => 'Manual backup',
+                    'trigger_source' => 'manual-ui',
+                ),
+                $payload_overrides
             ),
             HOUR_IN_SECONDS
         );
@@ -179,6 +185,148 @@ class Remote_Backup_Admin {
         update_option( self::ACTIVE_JOB_OPTION, $job_id, false );
 
         return $this->set_backup_job_state( $job_id, $state );
+    }
+
+    public function queue_async_backup_request( $scope = 'both', $remote_mode = 'local', array $folders = array(), array $args = array() ) {
+        if ( ! $this->has_backup_features() ) {
+            return new WP_Error( 'rb_backup_unavailable', 'Backup features are not available on this site.' );
+        }
+
+        $scope = sanitize_text_field( (string) $scope );
+        if ( ! in_array( $scope, array( 'database', 'files', 'both' ), true ) ) {
+            $scope = 'both';
+        }
+
+        $remote_mode = $this->normalize_remote_mode( $remote_mode );
+        $folders     = array_values(
+            array_filter(
+                array_map(
+                    static function ( $folder ) {
+                        return sanitize_text_field( (string) $folder );
+                    },
+                    $folders
+                )
+            )
+        );
+
+        $active_job = $this->active_job_state();
+        if ( $active_job && in_array( $active_job['status'] ?? '', array( 'queued', 'running' ), true ) ) {
+            return new WP_Error(
+                'rb_backup_running',
+                'A backup is already running. Wait for it to finish before starting another one.',
+                array(
+                    'jobId'  => $active_job['id'] ?? '',
+                    'status' => $active_job['status'] ?? 'running',
+                )
+            );
+        }
+
+        $context_label = sanitize_text_field( (string) ( $args['context_label'] ?? 'Manual backup' ) );
+        if ( '' === $context_label ) {
+            $context_label = 'Manual backup';
+        }
+
+        $trigger_source = sanitize_key( (string) ( $args['trigger_source'] ?? 'manual-ui' ) );
+        if ( '' === $trigger_source ) {
+            $trigger_source = 'manual-ui';
+        }
+
+        $job = $this->create_backup_job(
+            $scope,
+            $remote_mode,
+            $folders,
+            array(
+                'message'        => sanitize_text_field( (string) ( $args['queued_message'] ?? 'Backup queued. Waiting for the background worker to start.' ) ),
+                'trigger_source' => $trigger_source,
+            ),
+            array(
+                'context_label'  => $context_label,
+                'trigger_source' => $trigger_source,
+            )
+        );
+
+        $queued = $this->schedule_async_backup_job( $job['id'] );
+        $this->logger->log(
+            sprintf(
+                'Backup queued via %1$s — job: %2$s, scope: %3$s, delivery: %4$s%5$s',
+                $trigger_source,
+                $job['id'],
+                $scope,
+                $remote_mode,
+                $folders ? ', folders: ' . implode( ', ', $folders ) : ''
+            )
+        );
+
+        return array(
+            'jobId'              => $job['id'],
+            'status'             => $job['status'],
+            'phase'              => $job['phase'],
+            'message'            => $queued
+                ? 'Backup queued. The background worker will start automatically.'
+                : 'Backup queued, but WordPress could not trigger the background worker immediately. Check WP-Cron or loopback access if it does not start.',
+            'noticeType'         => $queued ? 'info' : 'warning',
+            'queuedImmediately'  => (bool) $queued,
+            'remoteMode'         => $remote_mode,
+            'scope'              => $scope,
+            'triggerSource'      => $trigger_source,
+        );
+    }
+
+    public function get_backup_job_status_payload( $job_id = '' ) {
+        $job_id = sanitize_text_field( (string) $job_id );
+        if ( '' === $job_id ) {
+            $job_id = $this->active_job_id();
+        }
+
+        if ( '' === $job_id ) {
+            return array(
+                'jobId'      => '',
+                'status'     => 'idle',
+                'phase'      => 'idle',
+                'message'    => '',
+                'noticeType' => 'info',
+                'backupId'   => null,
+                'totalSize'  => 0,
+                'updatedAt'  => null,
+            );
+        }
+
+        $state = $this->get_backup_job_state( $job_id );
+        if ( ! $state ) {
+            if ( $job_id === $this->active_job_id() ) {
+                delete_option( self::ACTIVE_JOB_OPTION );
+            }
+
+            return array(
+                'jobId'      => $job_id,
+                'status'     => 'missing',
+                'phase'      => 'idle',
+                'message'    => 'Backup job state was not found.',
+                'noticeType' => 'warning',
+                'backupId'   => null,
+                'totalSize'  => 0,
+                'updatedAt'  => null,
+            );
+        }
+
+        $phase = $state['phase'] ?? 'idle';
+        if ( in_array( $state['status'] ?? '', array( 'queued', 'running' ), true ) ) {
+            $current_phase = $this->runner->get_progress();
+            if ( 'idle' !== $current_phase ) {
+                $phase = $current_phase;
+            }
+        }
+
+        return array(
+            'jobId'      => $job_id,
+            'status'     => $state['status'] ?? 'idle',
+            'phase'      => $phase,
+            'message'    => $state['message'] ?? '',
+            'noticeType' => $state['notice_type'] ?? 'info',
+            'backupId'   => $state['backup_id'] ?? null,
+            'totalSize'  => $state['total_size'] ?? 0,
+            'updatedAt'  => $state['updated_at'] ?? null,
+        );
     }
 
     private function schedule_async_backup_job( $job_id ) {
@@ -276,6 +424,10 @@ class Remote_Backup_Admin {
         $scope       = sanitize_text_field( $payload['scope'] ?? 'both' );
         $remote_mode = $this->normalize_remote_mode( $payload['remote_mode'] ?? 'local' );
         $folders     = ! empty( $payload['folders'] ) && is_array( $payload['folders'] ) ? array_values( $payload['folders'] ) : array();
+        $context     = sanitize_text_field( (string) ( $payload['context_label'] ?? 'Manual backup' ) );
+        if ( '' === $context ) {
+            $context = 'Manual backup';
+        }
 
         $this->update_backup_job_state(
             $job_id,
@@ -303,7 +455,7 @@ class Remote_Backup_Admin {
             return;
         }
 
-        $remote = $this->maybe_send_remote_backup( $result, 'Manual backup', $remote_mode );
+        $remote = $this->maybe_send_remote_backup( $result, $context, $remote_mode );
         $notice = $this->build_backup_notice_data( $result, $remote );
 
         $this->logger->log( 'Async backup finished — job: ' . $job_id . ', backup: ' . ( $result['id'] ?? 'unknown' ) );
@@ -345,47 +497,51 @@ class Remote_Backup_Admin {
             }
         }
 
-        $active_job = $this->active_job_state();
-        if ( $active_job && in_array( $active_job['status'] ?? '', array( 'queued', 'running' ), true ) ) {
+        $job = $this->queue_async_backup_request(
+            $scope,
+            $remote_mode,
+            $folders,
+            array(
+                'context_label' => 'Manual backup',
+                'trigger_source' => 'manual-ui',
+                'queued_message' => 'Backup queued. Waiting for the background worker to start.',
+            )
+        );
+        if ( is_wp_error( $job ) ) {
             wp_send_json_error(
                 array(
-                    'message' => 'A backup is already running. Wait for it to finish before starting another one.',
-                    'jobId'   => $active_job['id'] ?? '',
-                    'status'  => $active_job['status'] ?? 'running',
+                    'message' => $job->get_error_message(),
+                    'jobId'   => $job->get_error_data()['jobId'] ?? '',
+                    'status'  => $job->get_error_data()['status'] ?? 'running',
                 )
             );
         }
 
-        $job = $this->create_backup_job( $scope, $remote_mode, $folders );
-        $this->logger->log( "AJAX backup queued — job: {$job['id']}, scope: {$scope}, delivery: {$remote_mode}" . ( $folders ? ', folders: ' . implode( ', ', $folders ) : '' ) );
-
         $payload = array(
             'success' => true,
             'data'    => array(
-                'jobId'      => $job['id'],
+                'jobId'      => $job['jobId'],
                 'status'     => $job['status'],
                 'phase'      => $job['phase'],
                 'message'    => 'Backup started. The page will update automatically.',
-                'noticeType' => 'info',
+                'noticeType' => $job['noticeType'],
             ),
         );
 
         if ( $this->background_finish_supported() ) {
             $this->send_background_start_response( $payload );
-            $this->process_async_backup_job( $job['id'] );
+            $this->process_async_backup_job( $job['jobId'] );
             exit;
         }
-
-        $queued = $this->schedule_async_backup_job( $job['id'] );
         wp_send_json_success(
             array(
-                'jobId'      => $job['id'],
+                'jobId'      => $job['jobId'],
                 'status'     => $job['status'],
                 'phase'      => $job['phase'],
-                'message'    => $queued
+                'message'    => $job['queuedImmediately']
                     ? 'Backup started. The page will update automatically.'
                     : 'Backup queued, but WordPress could not trigger the background worker immediately. If it does not start, check WP-Cron or loopback access.',
-                'noticeType' => $queued ? 'info' : 'warning',
+                'noticeType' => $job['noticeType'],
             )
         );
     }
@@ -419,54 +575,8 @@ class Remote_Backup_Admin {
             wp_send_json_error( 'Permission denied.' );
         }
 
-        $job_id = sanitize_text_field( wp_unslash( $_POST['job_id'] ?? $this->active_job_id() ) );
-        if ( '' === $job_id ) {
-            wp_send_json_success(
-                array(
-                    'jobId'   => '',
-                    'status'  => 'idle',
-                    'phase'   => 'idle',
-                    'message' => '',
-                )
-            );
-        }
-
-        $state = $this->get_backup_job_state( $job_id );
-        if ( ! $state ) {
-            if ( $job_id === $this->active_job_id() ) {
-                delete_option( self::ACTIVE_JOB_OPTION );
-            }
-
-            wp_send_json_success(
-                array(
-                    'jobId'   => $job_id,
-                    'status'  => 'missing',
-                    'phase'   => 'idle',
-                    'message' => 'Backup job state was not found.',
-                )
-            );
-        }
-
-        $phase = $state['phase'] ?? 'idle';
-        if ( in_array( $state['status'] ?? '', array( 'queued', 'running' ), true ) ) {
-            $current_phase = $this->runner->get_progress();
-            if ( 'idle' !== $current_phase ) {
-                $phase = $current_phase;
-            }
-        }
-
-        wp_send_json_success(
-            array(
-                'jobId'      => $job_id,
-                'status'     => $state['status'] ?? 'idle',
-                'phase'      => $phase,
-                'message'    => $state['message'] ?? '',
-                'noticeType' => $state['notice_type'] ?? 'info',
-                'backupId'   => $state['backup_id'] ?? null,
-                'totalSize'  => $state['total_size'] ?? 0,
-                'updatedAt'  => $state['updated_at'] ?? null,
-            )
-        );
+        $job_id = sanitize_text_field( wp_unslash( $_POST['job_id'] ?? '' ) );
+        wp_send_json_success( $this->get_backup_job_status_payload( $job_id ) );
     }
 
     public function ajax_save_folders() {

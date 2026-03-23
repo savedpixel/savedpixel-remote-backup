@@ -3,7 +3,7 @@
  * Plugin Name: SavedPixel Remote Backup
  * Plugin URI:  https://github.com/savedpixel
  * Description: Create, schedule, and export WordPress backups.
- * Version:     1.0
+ * Version:     1.1.0
  * Requires at least: 6.5
  * Requires PHP: 8.1
  * Author:      Byron Jacobs
@@ -26,7 +26,7 @@ savedpixel_register_admin_preview_asset(
 );
 
 if ( ! defined( 'RB_VERSION' ) ) {
-    define( 'RB_VERSION', '1.0' );
+    define( 'RB_VERSION', '1.1.0' );
 }
 
 if ( ! defined( 'RB_PLUGIN_DIR' ) ) {

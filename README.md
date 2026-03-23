@@ -13,6 +13,7 @@ SavedPixel Remote Backup is a WordPress backup workspace for database dumps, fil
 - Keep backups local only or deliver them to remote storage after they finish.
 - Download or delete artifacts from the backup history table.
 - Expose a pull token so a monitor site can read backup status and fetch completed artifacts.
+- Accept authenticated remote trigger requests to start backups on demand from a paired monitor site.
 
 ## Features
 
@@ -27,6 +28,8 @@ SavedPixel Remote Backup is a WordPress backup workspace for database dumps, fil
 - Remote delivery support with local-only vs remote-delivery modes.
 - Remote transport configuration for SSH or FTP, including connection testing and remote-path setup.
 - Pull-token API for remote catalog access and artifact downloads by a monitor site.
+- Pull-token-authenticated REST endpoint for remote backup triggering by a paired monitor site.
+- Trigger metadata response for monitor-side run tracking.
 - In-dashboard transfer/progress state for long-running backups.
 
 ## Admin Page

@@ -9,10 +9,12 @@ class Remote_Backup_Api {
 
     private $storage;
     private $scheduler;
+    private $admin;
 
-    public function __construct( Remote_Backup_Storage $storage, Remote_Backup_Scheduler $scheduler ) {
+    public function __construct( Remote_Backup_Storage $storage, Remote_Backup_Scheduler $scheduler, Remote_Backup_Admin $admin ) {
         $this->storage   = $storage;
         $this->scheduler = $scheduler;
+        $this->admin     = $admin;
 
         add_action( 'rest_api_init', array( $this, 'register_routes' ) );
     }
@@ -65,6 +67,16 @@ class Remote_Backup_Api {
                 'permission_callback' => array( $this, 'authorize_pull_request' ),
             )
         );
+
+        register_rest_route(
+            'remote-backup/v1',
+            '/trigger',
+            array(
+                'methods'             => 'POST',
+                'callback'            => array( $this, 'trigger_callback' ),
+                'permission_callback' => array( $this, 'authorize_pull_request' ),
+            )
+        );
     }
 
     public function status_callback( WP_REST_Request $request = null ) {
@@ -97,6 +109,7 @@ class Remote_Backup_Api {
                     'database' => $this->scheduler->describe_schedule( 'database' ),
                     'files'    => $this->scheduler->describe_schedule( 'files' ),
                 ),
+                'active_job'           => $this->admin->get_backup_job_status_payload(),
                 'pull'                 => array(
                     'enabled'     => '' !== self::get_pull_token(),
                     'catalog_url' => rest_url( 'remote-backup/v1/backups' ),
@@ -179,6 +192,45 @@ class Remote_Backup_Api {
             return $streamed;
         }
         exit;
+    }
+
+    public function trigger_callback( WP_REST_Request $request ) {
+        $scope       = sanitize_text_field( (string) $request->get_param( 'scope' ) );
+        $remote_mode = sanitize_text_field( (string) $request->get_param( 'remote_mode' ) );
+        $folders     = $request->get_param( 'folders' );
+        $folders     = is_array( $folders ) ? $folders : array();
+
+        $result = $this->admin->queue_async_backup_request(
+            $scope,
+            $remote_mode,
+            $folders,
+            array(
+                'context_label'  => 'Remote trigger',
+                'trigger_source' => 'remote-api',
+                'queued_message' => 'Backup queued from remote trigger request.',
+            )
+        );
+
+        if ( is_wp_error( $result ) ) {
+            $status = 'rb_backup_running' === $result->get_error_code() ? 409 : 400;
+
+            return new WP_Error(
+                $result->get_error_code(),
+                $result->get_error_message(),
+                array(
+                    'status' => $status,
+                    'data'   => $result->get_error_data(),
+                )
+            );
+        }
+
+        return rest_ensure_response(
+            array(
+                'site'       => home_url(),
+                'job'        => $result,
+                'active_job' => $this->admin->get_backup_job_status_payload( $result['jobId'] ?? '' ),
+            )
+        );
     }
 
     public function authorize_pull_request( WP_REST_Request $request ) {
