@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.3.0 - 2026-03-27
+## 1.2.1 - 2026-03-27
 
 - Added dismissible in-progress backup modal support with inline progress continuation.
 - Changed inline backup progress to stay hidden until the modal is dismissed.

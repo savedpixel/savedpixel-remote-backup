@@ -3,7 +3,7 @@ Contributors: savedpixel
 Tags: backup, database, files, remote, scheduled
 Requires at least: 6.5
 Tested up to: 6.9
-Stable tag: 1.2.0
+Stable tag: 1.2.1
 Requires PHP: 8.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -18,6 +18,7 @@ SavedPixel Remote Backup is a WordPress backup workspace for database dumps, fil
 
 * Backup scopes for database, files, and both.
 * Manual backups from wp-admin with asynchronous job handling and progress feedback.
+* Dismissible backup progress modal that continues as a full-width inline progress row.
 * Scheduled database and file backups with separate frequency, time, and weekday controls.
 * Retention controls for how many database and file backups to keep.
 * Local artifact storage for compressed database dumps and ZIP archives.
@@ -32,5 +33,5 @@ SavedPixel Remote Backup is a WordPress backup workspace for database dumps, fil
 
 == Changelog ==
 
-= 1.2.0 =
+= 1.2.1 =
 * See CHANGELOG.md for full release history.
