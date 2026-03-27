@@ -1,68 +1,138 @@
 /* Remote Backup admin compatibility layer.
  * The page layout now comes from savedpixel-admin-preview.css.
- * Keep only runtime-only UI that the shared preview stylesheet does not define.
+ * Keep only plugin-specific UI that the shared preview stylesheet does not define.
  */
 
-.rb-toast-stack {
-  position: fixed;
-  top: 46px;
-  right: 20px;
-  z-index: 100000;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: min(360px, calc(100vw - 32px));
+#sp-progress-overlay {
+    display: block;
+    width: 100%;
+    margin: 0 0 20px;
+    padding: 16px 18px 14px;
+    border: 1px solid #dcdcde;
+    border-radius: 8px;
+    background: #fff;
 }
 
-.rb-toast {
-  position: relative;
-  padding: 14px 42px 14px 14px;
-  border-radius: 8px;
-  border-left: 4px solid var(--primary, #2271b1);
-  background: var(--surface, #ffffff);
-  color: var(--text, #1d2327);
-  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
+.sp-progress-inline-shell {
+    display: grid;
+    width: 100%;
+    max-width: none;
+    gap: 10px;
 }
 
-.rb-toast--success {
-  border-left-color: var(--success, #00a32a);
+.sp-progress-inline-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
 }
 
-.rb-toast--warning {
-  border-left-color: var(--warning, #996800);
+.sp-progress-inline-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
 }
 
-.rb-toast--error {
-  border-left-color: var(--danger, #d63638);
+.sp-spin,
+.sp-progress-inline-icon {
+    animation: sp-progress-spin 0.9s linear infinite;
 }
 
-.rb-toast__body {
-  font-size: 13px;
-  line-height: 1.5;
+.sp-progress-inline-icon {
+    width: 16px;
+    height: 16px;
+    color: #2271b1;
+    font-size: 16px;
 }
 
-.rb-toast__close {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  border: 0;
-  background: transparent;
-  color: var(--muted, #50575e);
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0;
+.sp-progress-inline-phase {
+    color: #111827;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.3;
 }
 
-.rb-toast__close:hover {
-  color: var(--text, #1d2327);
+.sp-progress-inline-pct {
+    flex: 0 0 auto;
+    color: #50575e;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.sp-progress-inline-bar {
+    width: 100%;
+    height: 8px;
+    border-radius: 999px;
+    background: #e5e7eb;
+    overflow: hidden;
+}
+
+.sp-progress-inline-bar-fill {
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #2271b1, #43a047);
+    transition: width 0.35s ease;
+}
+
+.sp-progress-inline-sizes {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: nowrap;
+    color: #50575e;
+    font-size: 12px;
+    overflow-x: auto;
+}
+
+.sp-progress-inline-stat {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.sp-progress-inline-stat + .sp-progress-inline-stat::before {
+    content: "";
+    width: 1px;
+    height: 12px;
+    margin-right: 2px;
+    background: #dcdcde;
+}
+
+.sp-progress-inline-stat-label {
+    color: #6b7280;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.sp-progress-inline-stat-value {
+    color: #111827;
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+@keyframes sp-progress-spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 @media (max-width: 782px) {
-  .rb-toast-stack {
-    top: 32px;
-    right: 12px;
-    left: 12px;
-    width: auto;
-  }
+    #sp-progress-overlay {
+        padding: 14px 16px 12px;
+    }
+
+    .sp-progress-inline-header {
+        gap: 10px;
+    }
+
+    .sp-progress-inline-sizes {
+        gap: 12px;
+    }
 }

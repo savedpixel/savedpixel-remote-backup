@@ -41,8 +41,15 @@ class Remote_Backup_Admin {
             add_action( 'wp_ajax_rb_backup_progress', array( $this, 'ajax_backup_progress' ) );
             add_action( 'wp_ajax_rb_backup_status', array( $this, 'ajax_backup_status' ) );
             add_action( 'wp_ajax_rb_save_folders', array( $this, 'ajax_save_folders' ) );
-
-            $this->downloads->init();
+            add_action( 'wp_ajax_rb_list_dir', array( $this, 'ajax_list_dir' ) );
+            add_action( 'wp_ajax_rb_gdrive_disconnect', array( $this, 'ajax_gdrive_disconnect' ) );
+            add_action( 'wp_ajax_rb_gdrive_manual_auth', array( $this, 'ajax_gdrive_manual_auth' ) );
+            add_action( 'wp_ajax_rb_onedrive_disconnect', array( $this, 'ajax_onedrive_disconnect' ) );
+            add_action( 'wp_ajax_rb_onedrive_manual_auth', array( $this, 'ajax_onedrive_manual_auth' ) );
+        add_action( 'wp_ajax_rb_dropbox_disconnect', array( $this, 'ajax_dropbox_disconnect' ) );
+        add_action( 'wp_ajax_rb_dropbox_manual_auth', array( $this, 'ajax_dropbox_manual_auth' ) );
+            add_action( 'wp_ajax_rb_test_connection', array( $this, 'ajax_test_connection' ) );
+            add_action( 'wp_ajax_rb_simulate_backup', array( $this, 'ajax_simulate_backup' ) );
         }
 
         if ( $this->has_monitor_features() && ! class_exists( 'Remote_Backup_Monitor_Admin' ) ) {
@@ -90,8 +97,10 @@ class Remote_Backup_Admin {
             savedpixel_admin_enqueue_preview_style();
         }
 
-        wp_enqueue_style( 'rb-admin', $this->admin_asset_url( 'admin.css' ), array(), RB_VERSION );
-        wp_enqueue_script( 'rb-admin', $this->admin_asset_url( 'admin.js' ), array(), RB_VERSION, true );
+        $css_path = plugin_dir_path( __DIR__ ) . 'assets/admin.css';
+        $js_path  = plugin_dir_path( __DIR__ ) . 'assets/admin.js';
+        wp_enqueue_style( 'rb-admin', $this->admin_asset_url( 'admin.css' ), array(), (string) @filemtime( $css_path ) );
+        wp_enqueue_script( 'rb-admin', $this->admin_asset_url( 'admin.js' ), array(), (string) @filemtime( $js_path ), true );
     }
 
     private function background_finish_supported() {
@@ -108,6 +117,20 @@ class Remote_Backup_Admin {
         if ( empty( $state ) || ! in_array( $state['status'] ?? '', array( 'queued', 'running' ), true ) ) {
             delete_option( self::ACTIVE_JOB_OPTION );
             return '';
+        }
+
+        // Auto-clear stale jobs stuck in "queued" for more than 5 minutes.
+        if ( 'queued' === ( $state['status'] ?? '' ) && ! empty( $state['created_at'] ) ) {
+            $created = strtotime( $state['created_at'] );
+            if ( $created && ( time() - $created ) > 300 ) {
+                $this->set_backup_job_state( $job_id, array_merge( $state, array(
+                    'status'  => 'failed',
+                    'phase'   => 'failed',
+                    'message' => 'Backup timed out — the background worker never started.',
+                ) ) );
+                delete_option( self::ACTIVE_JOB_OPTION );
+                return '';
+            }
         }
 
         return $job_id;
@@ -310,22 +333,33 @@ class Remote_Backup_Admin {
         }
 
         $phase = $state['phase'] ?? 'idle';
+        $progress_sizes = array( 'db_size' => 0, 'files_size' => 0, 'total_size' => 0, 'expected_size' => 0 );
         if ( in_array( $state['status'] ?? '', array( 'queued', 'running' ), true ) ) {
-            $current_phase = $this->runner->get_progress();
-            if ( 'idle' !== $current_phase ) {
-                $phase = $current_phase;
+            $progress = $this->runner->get_progress();
+            if ( is_array( $progress ) ) {
+                if ( 'idle' !== ( $progress['phase'] ?? 'idle' ) ) {
+                    $phase = $progress['phase'];
+                }
+                $progress_sizes['db_size']       = $progress['db_size'] ?? 0;
+                $progress_sizes['files_size']    = $progress['files_size'] ?? 0;
+                $progress_sizes['total_size']    = $progress['total_size'] ?? 0;
+                $progress_sizes['expected_size'] = $progress['expected_size'] ?? 0;
             }
         }
 
         return array(
-            'jobId'      => $job_id,
-            'status'     => $state['status'] ?? 'idle',
-            'phase'      => $phase,
-            'message'    => $state['message'] ?? '',
-            'noticeType' => $state['notice_type'] ?? 'info',
-            'backupId'   => $state['backup_id'] ?? null,
-            'totalSize'  => $state['total_size'] ?? 0,
-            'updatedAt'  => $state['updated_at'] ?? null,
+            'jobId'        => $job_id,
+            'status'       => $state['status'] ?? 'idle',
+            'phase'        => $phase,
+            'message'      => $state['message'] ?? '',
+            'noticeType'   => $state['notice_type'] ?? 'info',
+            'backupId'     => $state['backup_id'] ?? null,
+            'totalSize'    => $state['total_size'] ?? 0,
+            'dbSize'       => $progress_sizes['db_size'],
+            'filesSize'    => $progress_sizes['files_size'],
+            'progressSize' => $progress_sizes['total_size'],
+            'expectedSize' => $progress_sizes['expected_size'],
+            'updatedAt'    => $state['updated_at'] ?? null,
         );
     }
 
@@ -533,17 +567,14 @@ class Remote_Backup_Admin {
             $this->process_async_backup_job( $job['jobId'] );
             exit;
         }
-        wp_send_json_success(
-            array(
-                'jobId'      => $job['jobId'],
-                'status'     => $job['status'],
-                'phase'      => $job['phase'],
-                'message'    => $job['queuedImmediately']
-                    ? 'Backup started. The page will update automatically.'
-                    : 'Backup queued, but WordPress could not trigger the background worker immediately. If it does not start, check WP-Cron or loopback access.',
-                'noticeType' => $job['noticeType'],
-            )
-        );
+
+        // No fastcgi — run the backup synchronously before responding.
+        ignore_user_abort( true );
+        @set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- Long-running backup.
+        $this->process_async_backup_job( $job['jobId'] );
+
+        $final = $this->get_backup_job_status_payload( $job['jobId'] );
+        wp_send_json_success( $final );
     }
 
     public function ajax_backup_progress() {
@@ -593,6 +624,391 @@ class Remote_Backup_Admin {
         }
         update_option( 'rb_backup_folders', $folders );
         wp_send_json_success();
+    }
+
+    /**
+     * AJAX handler: list subdirectories of a given relative path.
+     */
+    public function ajax_list_dir() {
+        check_ajax_referer( 'rb_ajax', '_nonce' );
+        if ( ! current_user_can( 'manage_options' ) || ! $this->has_backup_features() ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $rel_path = isset( $_POST['path'] ) ? sanitize_text_field( wp_unslash( $_POST['path'] ) ) : '';
+
+        // Validate: must not contain path traversal.
+        if ( '' === $rel_path || false !== strpos( $rel_path, '..' ) ) {
+            wp_send_json_error( 'Invalid path.' );
+        }
+
+        $abs_path = trailingslashit( wp_normalize_path( ABSPATH . $rel_path ) );
+
+        // Must be under ABSPATH.
+        if ( 0 !== strpos( $abs_path, wp_normalize_path( ABSPATH ) ) ) {
+            wp_send_json_error( 'Invalid path.' );
+        }
+
+        if ( ! is_dir( $abs_path ) ) {
+            wp_send_json_error( 'Not a directory.' );
+        }
+
+        $skip          = array( '.', '..', '.git', '.svn', 'node_modules' );
+        $excluded_dirs = array_map(
+            'trailingslashit',
+            array(
+                wp_normalize_path( RB_STORAGE_DIR ),
+                wp_normalize_path( RB_BASE_DIR ),
+            )
+        );
+
+        $entries = array();
+        foreach ( scandir( $abs_path ) as $item ) {
+            if ( in_array( $item, $skip, true ) ) {
+                continue;
+            }
+            $item_abs = $abs_path . $item;
+
+            if ( is_dir( $item_abs ) ) {
+                $item_full = trailingslashit( wp_normalize_path( $item_abs ) );
+                if ( in_array( $item_full, $excluded_dirs, true ) ) {
+                    continue;
+                }
+                // Check if this subdirectory has any contents.
+                $has_children = false;
+                $child_scan   = @scandir( $item_abs ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+                if ( $child_scan ) {
+                    foreach ( $child_scan as $sub ) {
+                        if ( ! in_array( $sub, $skip, true ) ) {
+                            $has_children = true;
+                            break;
+                        }
+                    }
+                }
+                $entries[] = array(
+                    'name'        => $item,
+                    'path'        => $rel_path . '/' . $item,
+                    'isFile'      => false,
+                    'hasChildren' => $has_children,
+                );
+            } else {
+                $entries[] = array(
+                    'name'        => $item,
+                    'path'        => $rel_path . '/' . $item,
+                    'isFile'      => true,
+                    'hasChildren' => false,
+                );
+            }
+        }
+
+        // Sort: directories first, then files, each alphabetical.
+        usort( $entries, function ( $a, $b ) {
+            if ( $a['isFile'] !== $b['isFile'] ) {
+                return $a['isFile'] ? 1 : -1;
+            }
+            return strcasecmp( $a['name'], $b['name'] );
+        } );
+
+        wp_send_json_success( $entries );
+    }
+
+    public function ajax_gdrive_disconnect() {
+        check_ajax_referer( 'rb_ajax', '_nonce' );
+        if ( ! current_user_can( 'manage_options' ) || ! $this->has_backup_features() ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $provider = $this->scheduler ? $this->scheduler->get_provider( 'google_drive' ) : null;
+        if ( $provider ) {
+            $provider->disconnect();
+            $this->logger->log( 'Google Drive disconnected.' );
+        }
+
+        wp_send_json_success( array( 'message' => 'Google Drive disconnected.' ) );
+    }
+
+    public function ajax_gdrive_manual_auth() {
+        check_ajax_referer( 'rb_ajax', '_nonce' );
+        if ( ! current_user_can( 'manage_options' ) || ! $this->has_backup_features() ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $code = sanitize_text_field( wp_unslash( $_POST['code'] ?? '' ) );
+        if ( '' === $code ) {
+            wp_send_json_error( 'Authorization code is required.' );
+        }
+
+        /* Save custom OAuth credentials when provided. */
+        $custom_id     = sanitize_text_field( wp_unslash( $_POST['client_id'] ?? '' ) );
+        $custom_secret = sanitize_text_field( wp_unslash( $_POST['client_secret'] ?? '' ) );
+        if ( '' !== $custom_id ) {
+            update_option( 'rb_gdrive_client_id', $custom_id );
+        }
+        if ( '' !== $custom_secret ) {
+            update_option( 'rb_gdrive_client_secret', $custom_secret );
+        }
+
+        $provider = $this->scheduler ? $this->scheduler->get_provider( 'google_drive' ) : null;
+        if ( ! $provider ) {
+            wp_send_json_error( 'Google Drive provider not available.' );
+        }
+
+        $result = $provider->exchange_code( $code, 'http://localhost' );
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( $result->get_error_message() );
+        }
+
+        $this->logger->log( 'Google Drive authorized via manual code entry.' );
+        wp_send_json_success( array( 'message' => 'Google Drive connected successfully.' ) );
+    }
+
+    public function ajax_onedrive_disconnect() {
+        check_ajax_referer( 'rb_ajax', '_nonce' );
+        if ( ! current_user_can( 'manage_options' ) || ! $this->has_backup_features() ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $provider = $this->scheduler ? $this->scheduler->get_provider( 'onedrive' ) : null;
+        if ( $provider ) {
+            $provider->disconnect();
+            $this->logger->log( 'OneDrive disconnected.' );
+        }
+
+        wp_send_json_success( array( 'message' => 'OneDrive disconnected.' ) );
+    }
+
+    public function ajax_onedrive_manual_auth() {
+        check_ajax_referer( 'rb_ajax', '_nonce' );
+        if ( ! current_user_can( 'manage_options' ) || ! $this->has_backup_features() ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $code = sanitize_text_field( wp_unslash( $_POST['code'] ?? '' ) );
+        if ( '' === $code ) {
+            wp_send_json_error( 'Authorization code is required.' );
+        }
+
+        /* Save custom OAuth credentials when provided. */
+        $custom_id     = sanitize_text_field( wp_unslash( $_POST['client_id'] ?? '' ) );
+        $custom_secret = sanitize_text_field( wp_unslash( $_POST['client_secret'] ?? '' ) );
+        if ( '' !== $custom_id ) {
+            update_option( 'rb_onedrive_client_id', $custom_id );
+        }
+        if ( '' !== $custom_secret ) {
+            update_option( 'rb_onedrive_client_secret', $custom_secret );
+        }
+
+        $provider = $this->scheduler ? $this->scheduler->get_provider( 'onedrive' ) : null;
+        if ( ! $provider ) {
+            wp_send_json_error( 'OneDrive provider not available.' );
+        }
+
+        $result = $provider->exchange_code( $code, 'http://localhost' );
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( $result->get_error_message() );
+        }
+
+        $this->logger->log( 'OneDrive authorized via manual code entry.' );
+        wp_send_json_success( array( 'message' => 'OneDrive connected successfully.' ) );
+    }
+
+    public function ajax_dropbox_disconnect() {
+        check_ajax_referer( 'rb_ajax', '_nonce' );
+        if ( ! current_user_can( 'manage_options' ) || ! $this->has_backup_features() ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $provider = $this->scheduler ? $this->scheduler->get_provider( 'dropbox' ) : null;
+        if ( $provider ) {
+            $provider->disconnect();
+            $this->logger->log( 'Dropbox disconnected.' );
+        }
+
+        wp_send_json_success( array( 'message' => 'Dropbox disconnected.' ) );
+    }
+
+    public function ajax_dropbox_manual_auth() {
+        check_ajax_referer( 'rb_ajax', '_nonce' );
+        if ( ! current_user_can( 'manage_options' ) || ! $this->has_backup_features() ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $code = sanitize_text_field( wp_unslash( $_POST['code'] ?? '' ) );
+        if ( '' === $code ) {
+            wp_send_json_error( 'Authorization code is required.' );
+        }
+
+        /* Save custom OAuth credentials when provided. */
+        $custom_id     = sanitize_text_field( wp_unslash( $_POST['client_id'] ?? '' ) );
+        $custom_secret = sanitize_text_field( wp_unslash( $_POST['client_secret'] ?? '' ) );
+        if ( '' !== $custom_id ) {
+            update_option( 'rb_dropbox_client_id', $custom_id );
+        }
+        if ( '' !== $custom_secret ) {
+            update_option( 'rb_dropbox_client_secret', $custom_secret );
+        }
+
+        $provider = $this->scheduler ? $this->scheduler->get_provider( 'dropbox' ) : null;
+        if ( ! $provider ) {
+            wp_send_json_error( 'Dropbox provider not available.' );
+        }
+
+        $result = $provider->exchange_code( $code, 'http://localhost' );
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( $result->get_error_message() );
+        }
+
+        $this->logger->log( 'Dropbox authorized via manual code entry.' );
+        wp_send_json_success( array( 'message' => 'Dropbox connected successfully.' ) );
+    }
+
+    public function ajax_test_connection() {
+        check_ajax_referer( 'rb_ajax', '_nonce' );
+        if ( ! current_user_can( 'manage_options' ) || ! $this->has_backup_features() ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $result = $this->scheduler->test_connection();
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_error( $result->get_error_message() );
+        }
+
+        wp_send_json_success( array( 'message' => $result ) );
+    }
+
+    /**
+     * Simulate a 2 GB backup by writing fake progress transients through each phase.
+     * The client polls rb_backup_status as usual; this endpoint steps the transient forward
+     * on each call so the modal can display realistic size values.
+     */
+    public function ajax_simulate_backup() {
+        check_ajax_referer( 'rb_ajax', '_nonce' );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( 'Permission denied.' );
+        }
+
+        $action = sanitize_key( wp_unslash( $_POST['sim_action'] ?? 'start' ) );
+
+        if ( 'start' === $action ) {
+            $sim = array(
+                'phase'        => 'database',
+                'db_target'    => 150 * 1024 * 1024,     // 150 MB database
+                'file_target'  => 1850 * 1024 * 1024,    // 1.85 GB files
+                'current_db'   => 0,
+                'current_files'=> 0,
+                'extra_ticks'  => 0,
+            );
+            update_option( 'rb_sim_state', $sim );
+
+            // Create a fake job so the polling loop has a job ID.
+            $job_id = 'sim-' . wp_generate_password( 8, false );
+            $this->set_backup_job_state( $job_id, array(
+                'status'     => 'running',
+                'phase'      => 'database',
+                'message'    => 'Simulated backup running.',
+                'notice_type'=> 'info',
+                'backup_id'  => null,
+                'total_size' => 0,
+            ) );
+            update_option( self::ACTIVE_JOB_OPTION, $job_id );
+
+            $this->runner->set_progress( 'database', array(
+                'db_size'    => 0,
+                'files_size' => 0,
+                'total_size' => 0,
+            ) );
+
+            wp_send_json_success( array(
+                'jobId'   => $job_id,
+                'status'  => 'running',
+                'phase'   => 'database',
+                'message' => 'Simulated 2 GB backup started.',
+            ) );
+        }
+
+        if ( 'tick' === $action ) {
+            $sim = get_option( 'rb_sim_state', array() );
+            if ( empty( $sim ) ) {
+                wp_send_json_error( 'No simulation in progress.' );
+            }
+
+            $mb            = 1024 * 1024; // 1 MB per tick.
+            $db_target     = $sim['db_target'];
+            $file_target   = $sim['file_target'];
+            $total_target  = $db_target + $file_target;
+            $current_db    = $sim['current_db'] ?? 0;
+            $current_files = $sim['current_files'] ?? 0;
+            $phase         = $sim['phase'] ?? 'database';
+
+            if ( 'database' === $phase ) {
+                $current_db = min( $current_db + $mb, $db_target );
+                if ( $current_db >= $db_target ) {
+                    $phase = 'files';
+                }
+            } elseif ( 'files' === $phase ) {
+                $current_files = min( $current_files + $mb, $file_target );
+                if ( $current_files >= $file_target ) {
+                    $phase = 'plugins';
+                }
+            } elseif ( 'plugins' === $phase ) {
+                $sim['extra_ticks'] = ( $sim['extra_ticks'] ?? 0 ) + 1;
+                if ( $sim['extra_ticks'] >= 5 ) {
+                    $phase = 'remote';
+                    $sim['extra_ticks'] = 0;
+                }
+            } elseif ( 'remote' === $phase ) {
+                $sim['extra_ticks'] = ( $sim['extra_ticks'] ?? 0 ) + 1;
+                if ( $sim['extra_ticks'] >= 5 ) {
+                    $phase = 'complete';
+                }
+            }
+
+            $sim['current_db']    = $current_db;
+            $sim['current_files'] = $current_files;
+            $sim['phase']         = $phase;
+            $current_total        = $current_db + $current_files;
+
+            $progress_data = array(
+                'expected_size' => $total_target,
+                'db_size'       => $current_db,
+                'files_size'    => $current_files,
+                'total_size'    => $current_total,
+            );
+
+            if ( 'complete' === $phase ) {
+                $progress_data['db_size']    = $db_target;
+                $progress_data['files_size'] = $file_target;
+                $progress_data['total_size'] = $total_target;
+
+                $job_id = $this->active_job_id();
+                if ( $job_id ) {
+                    $this->update_backup_job_state( $job_id, array(
+                        'status'      => 'success',
+                        'phase'       => 'complete',
+                        'message'     => 'Simulated 2 GB backup completed.',
+                        'notice_type' => 'success',
+                        'total_size'  => $total_target,
+                    ) );
+                    delete_option( self::ACTIVE_JOB_OPTION );
+                }
+                delete_option( 'rb_sim_state' );
+
+                $this->runner->set_progress( $phase, $progress_data );
+                wp_send_json_success( array( 'phase' => $phase, 'done' => true ) );
+            }
+
+            $this->runner->set_progress( $phase, $progress_data );
+
+            $job_id = $this->active_job_id();
+            if ( $job_id ) {
+                $this->update_backup_job_state( $job_id, array( 'phase' => $phase ) );
+            }
+
+            update_option( 'rb_sim_state', $sim );
+            wp_send_json_success( array( 'phase' => $phase, 'done' => false ) );
+        }
+
+        wp_send_json_error( 'Invalid simulation action.' );
     }
 
     public function ajax_monitor_action() {
@@ -743,8 +1159,41 @@ class Remote_Backup_Admin {
             return;
         }
 
+        // Handle Google Drive OAuth callback.
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- State param verified below.
+        if ( isset( $_GET['code'] ) && isset( $_GET['state'] ) ) {
+            $state = sanitize_text_field( wp_unslash( $_GET['state'] ) );
+            if ( wp_verify_nonce( $state, 'rb_gdrive_oauth' ) ) {
+                $code     = sanitize_text_field( wp_unslash( $_GET['code'] ) );
+                $provider = $this->scheduler ? $this->scheduler->get_provider( 'google_drive' ) : null;
+                if ( $provider ) {
+                    $result = $provider->exchange_code( $code );
+                    if ( is_wp_error( $result ) ) {
+                        $this->notice = $this->notice_html( 'Google Drive authorization failed: ' . $result->get_error_message(), 'error' );
+                    } else {
+                        $this->logger->log( 'Google Drive authorized successfully.' );
+                        wp_safe_redirect( admin_url( 'admin.php?page=' . $this->backup_page_slug() . '&rb_gdrive_connected=1' ) );
+                        exit;
+                    }
+                }
+            }
+        }
+
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Display-only param.
+        if ( isset( $_GET['rb_gdrive_connected'] ) ) {
+            $this->notice = $this->notice_html( 'Google Drive connected successfully.' );
+        }
+
         $has_backup  = $this->has_backup_features();
         $has_monitor = $this->has_monitor_features();
+        $save_all_settings = $has_backup && isset( $_POST['rb_save_settings'] );
+        $settings_save_generated_pull_token = false;
+
+        if ( $save_all_settings ) {
+            $_POST['rb_save_schedule']    = '1';
+            $_POST['rb_save_connection']  = '1';
+            $_POST['rb_save_pull_access'] = '1';
+        }
 
         // Manual backup with explicit scope.
         if ( $has_backup && isset( $_POST['rb_manual_scope'] ) ) {
@@ -774,7 +1223,7 @@ class Remote_Backup_Admin {
 
         // Save scheduled settings.
         if ( $has_backup && isset( $_POST['rb_save_schedule'] ) ) {
-            check_admin_referer( 'rb_schedule' );
+            check_admin_referer( 'rb_schedule', 'rb_schedule_nonce' );
 
             $db_frequency = $this->scheduler->sanitize_schedule_frequency( sanitize_text_field( wp_unslash( $_POST['rb_schedule_database_frequency'] ?? get_option( 'rb_schedule_database_frequency', 'none' ) ) ) );
             $db_time      = $this->scheduler->sanitize_schedule_time( sanitize_text_field( wp_unslash( $_POST['rb_schedule_database_time'] ?? get_option( 'rb_schedule_database_time', '02:00' ) ) ) );
@@ -790,11 +1239,17 @@ class Remote_Backup_Admin {
             update_option( 'rb_schedule_files_time', $files_time );
             update_option( 'rb_schedule_files_weekday', $files_weekday );
 
-            $scheduled_remote_mode = get_option( 'rb_scheduled_remote_mode', 'remote' );
-            if ( isset( $_POST['rb_scheduled_remote_mode'] ) ) {
-                $scheduled_remote_mode = $this->normalize_remote_mode( sanitize_text_field( wp_unslash( $_POST['rb_scheduled_remote_mode'] ) ) );
+            foreach ( array( 'database', 'files' ) as $delivery_scope ) {
+                $opt_key = "rb_scheduled_remote_mode_{$delivery_scope}";
+                $mode    = get_option( $opt_key, 'remote' );
+                if ( isset( $_POST[ $opt_key ] ) ) {
+                    $mode = $this->normalize_remote_mode( sanitize_text_field( wp_unslash( $_POST[ $opt_key ] ) ) );
+                }
+                if ( 'remote' === $mode && ! $this->remote_settings_ready( get_option( 'rb_remote_protocol', 'ssh' ) ) ) {
+                    $mode = 'local';
+                }
+                update_option( $opt_key, $mode );
             }
-            update_option( 'rb_scheduled_remote_mode', $scheduled_remote_mode );
 
             $retain_db = (int) get_option( 'rb_retain_db', 0 );
             if ( isset( $_POST['rb_retain_db'] ) ) {
@@ -811,22 +1266,26 @@ class Remote_Backup_Admin {
             $this->logger->log(
                 'Schedule settings saved — db: ' . $db_frequency .
                 ( 'weekly' === $db_frequency ? ' on ' . $db_weekday : '' ) .
-                " @ {$db_time}, files: {$files_frequency}" .
+                " @ {$db_time} (delivery: " . get_option( 'rb_scheduled_remote_mode_database', 'remote' ) . '), files: ' . $files_frequency .
                 ( 'weekly' === $files_frequency ? ' on ' . $files_weekday : '' ) .
-                " @ {$files_time}, delivery: {$scheduled_remote_mode}, retain db: {$retain_db}, retain files: {$retain_files}"
+                " @ {$files_time} (delivery: " . get_option( 'rb_scheduled_remote_mode_files', 'remote' ) . "), retain db: {$retain_db}, retain files: {$retain_files}"
             );
-            $this->notice = $this->notice_html( 'Schedule settings saved.' );
+            if ( ! $save_all_settings ) {
+                $this->notice = $this->notice_html( 'Schedule settings saved.' );
+            }
         }
 
         // Save or test remote connection settings.
         if ( $has_backup && ( isset( $_POST['rb_save_connection'] ) || isset( $_POST['rb_test_remote'] ) ) ) {
-            check_admin_referer( 'rb_remote' );
+            check_admin_referer( 'rb_remote', 'rb_remote_nonce' );
             $protocol = $this->save_remote_settings_from_request();
             $label    = $this->remote_protocol_label( $protocol );
 
             if ( isset( $_POST['rb_save_connection'] ) ) {
                 $this->logger->log( "Remote connection settings saved — protocol: {$protocol}" );
-                $this->notice = $this->notice_html( 'Remote connection settings saved.' );
+                if ( ! $save_all_settings ) {
+                    $this->notice = $this->notice_html( 'Remote connection settings saved.' );
+                }
             }
 
             if ( isset( $_POST['rb_test_remote'] ) ) {
@@ -869,22 +1328,34 @@ class Remote_Backup_Admin {
 
         // Save pull access settings.
         if ( $has_backup && isset( $_POST['rb_save_pull_access'] ) ) {
-            check_admin_referer( 'rb_pull_access' );
+            check_admin_referer( 'rb_pull_access', 'rb_pull_access_nonce' );
 
             $token = trim( sanitize_text_field( wp_unslash( $_POST['rb_pull_token'] ?? '' ) ) );
             if ( '' === $token ) {
                 $token = Remote_Backup_Api::rotate_pull_token();
-                $this->notice = $this->notice_html( 'Pull token was empty, so a new one was generated.' );
+                $settings_save_generated_pull_token = true;
+                if ( ! $save_all_settings ) {
+                    $this->notice = $this->notice_html( 'Pull token was empty, so a new one was generated.' );
+                }
             } else {
                 update_option( Remote_Backup_Api::TOKEN_OPTION, $token );
-                $this->notice = $this->notice_html( 'Pull access settings saved.' );
+                if ( ! $save_all_settings ) {
+                    $this->notice = $this->notice_html( 'Pull access settings saved.' );
+                }
             }
 
             $this->logger->log( 'Pull access settings saved.' );
         }
 
+        if ( $save_all_settings ) {
+            $message = $settings_save_generated_pull_token
+                ? 'Backup settings saved. Pull token was empty, so a new one was generated.'
+                : 'Backup settings saved.';
+            $this->notice = $this->notice_html( $message );
+        }
+
         if ( $has_backup && isset( $_POST['rb_regenerate_pull_token'] ) ) {
-            check_admin_referer( 'rb_pull_access' );
+            check_admin_referer( 'rb_pull_access', 'rb_pull_access_nonce' );
             Remote_Backup_Api::rotate_pull_token();
             $this->logger->log( 'Pull token regenerated.' );
             $this->notice = $this->notice_html( 'Pull token regenerated. Update the monitor with the new token.' );
@@ -1185,32 +1656,6 @@ class Remote_Backup_Admin {
         return ucwords( str_replace( '_', ' ', (string) $scope ) );
     }
 
-    private function command_available( $command ) {
-        static $cache = array();
-
-        $command = sanitize_key( (string) $command );
-        if ( '' === $command ) {
-            return false;
-        }
-
-        if ( array_key_exists( $command, $cache ) ) {
-            return $cache[ $command ];
-        }
-
-        $path              = trim( (string) shell_exec( 'command -v ' . escapeshellarg( $command ) . ' 2>/dev/null' ) );
-        $cache[ $command ] = '' !== $path;
-
-        return $cache[ $command ];
-    }
-
-    private function sshpass_available() {
-        return $this->command_available( 'sshpass' );
-    }
-
-    private function ssh_tools_ready() {
-        return $this->command_available( 'ssh' ) && $this->command_available( 'scp' );
-    }
-
     private function render_monitor_summary_cards( $summary ) {
         if ( empty( $summary['total'] ) ) {
             return '';
@@ -1274,7 +1719,7 @@ class Remote_Backup_Admin {
                 </div>
                 <span id="sp-monitor-sites-count" class="sp-badge sp-badge--neutral"><?php echo esc_html( count( $sites ) . ' items' ); ?></span>
             </div>
-            <div class="sp-card sp-monitor-sites" id="sp-monitor-sites">
+            <div class="sp-card sp-monitor-sites sp-u-mt-0" id="sp-monitor-sites">
             <?php if ( empty( $sites ) ) : ?>
                 <div class="sp-card__body">
                     <p class="sp-empty">No sites monitored yet. Add one above.</p>
@@ -1609,7 +2054,7 @@ class Remote_Backup_Admin {
             <?php endif; ?>
             <?php if ( $running && '' !== $url ) : ?>
                 <div id="sp-cancel-wrap-<?php echo esc_attr( md5( $url ) ); ?>" class="sp-transfer-card__actions" style="margin-top:6px;">
-                    <a id="sp-cancel-<?php echo esc_attr( md5( $url ) ); ?>" href="#" class="rbm-monitor-action sp-link sp-link--danger" data-monitor-action="cancel_transfer" data-url="<?php echo esc_attr( $url ); ?>">Cancel Transfer</a>
+                    <a id="sp-cancel-<?php echo esc_attr( md5( $url ) ); ?>" href="#" class="sp-monitor-action sp-link sp-link--danger" data-monitor-action="cancel_transfer" data-url="<?php echo esc_attr( $url ); ?>">Cancel Transfer</a>
                 </div>
             <?php endif; ?>
         </div>
@@ -1626,16 +2071,37 @@ class Remote_Backup_Admin {
         return '<div class="notice notice-' . esc_attr( $type ) . ' is-dismissible"><p>' . esc_html( $msg ) . '</p></div>';
     }
 
+    private function maybe_migrate_delivery_options() {
+        $old = get_option( 'rb_scheduled_remote_mode' );
+        if ( false === $old ) {
+            return;
+        }
+        $mode = $this->normalize_remote_mode( $old );
+        if ( false === get_option( 'rb_scheduled_remote_mode_database' ) ) {
+            update_option( 'rb_scheduled_remote_mode_database', $mode );
+        }
+        if ( false === get_option( 'rb_scheduled_remote_mode_files' ) ) {
+            update_option( 'rb_scheduled_remote_mode_files', $mode );
+        }
+        delete_option( 'rb_scheduled_remote_mode' );
+    }
+
     private function normalize_remote_mode( $value ) {
         return 'remote' === sanitize_text_field( (string) $value ) ? 'remote' : 'local';
     }
 
     private function normalize_remote_protocol( $value ) {
-        return 'ftp' === sanitize_text_field( (string) $value ) ? 'ftp' : 'ssh';
+        $value = sanitize_text_field( (string) $value );
+        $providers = $this->scheduler ? $this->scheduler->get_providers() : array();
+        if ( isset( $providers[ $value ] ) ) {
+            return $value;
+        }
+        return 'ssh';
     }
 
     private function remote_protocol_label( $protocol ) {
-        return 'ftp' === $this->normalize_remote_protocol( $protocol ) ? 'FTP' : 'SSH';
+        $provider = $this->scheduler ? $this->scheduler->get_provider( $protocol ) : null;
+        return $provider ? $provider->get_label() : strtoupper( $protocol );
     }
 
     private function save_remote_settings_from_request() {
@@ -1643,46 +2109,10 @@ class Remote_Backup_Admin {
         $protocol = $this->normalize_remote_protocol( sanitize_text_field( wp_unslash( $_POST['rb_remote_protocol'] ?? get_option( 'rb_remote_protocol', 'ssh' ) ) ) );
         update_option( 'rb_remote_protocol', $protocol );
 
-        $ssh_host = sanitize_text_field( wp_unslash( $_POST['rb_ssh_host'] ?? get_option( 'rb_ssh_host', '' ) ) );
-        update_option( 'rb_ssh_host', $ssh_host );
-
-        $ssh_port = absint( $_POST['rb_ssh_port'] ?? get_option( 'rb_ssh_port', 22 ) ) ?: 22;
-        update_option( 'rb_ssh_port', $ssh_port );
-
-        $ssh_username = sanitize_text_field( wp_unslash( $_POST['rb_ssh_username'] ?? get_option( 'rb_ssh_username', '' ) ) );
-        update_option( 'rb_ssh_username', $ssh_username );
-
-        $ssh_auth = sanitize_text_field( wp_unslash( $_POST['rb_ssh_auth_method'] ?? get_option( 'rb_ssh_auth_method', 'key' ) ) );
-        if ( ! in_array( $ssh_auth, array( 'key', 'password' ), true ) ) {
-            $ssh_auth = 'key';
+        $provider = $this->scheduler ? $this->scheduler->get_provider( $protocol ) : null;
+        if ( $provider ) {
+            $provider->save_settings_from_request();
         }
-        update_option( 'rb_ssh_auth_method', $ssh_auth );
-
-        $ssh_password = (string) wp_unslash( $_POST['rb_ssh_password'] ?? get_option( 'rb_ssh_password', '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Passwords must be stored verbatim.
-        update_option( 'rb_ssh_password', $ssh_password );
-
-        $ssh_key = (string) wp_unslash( $_POST['rb_ssh_key'] ?? get_option( 'rb_ssh_key', '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Private keys must preserve their original formatting.
-        update_option( 'rb_ssh_key', $ssh_key );
-
-        $ssh_path = sanitize_text_field( wp_unslash( $_POST['rb_ssh_path'] ?? get_option( 'rb_ssh_path', '' ) ) );
-        update_option( 'rb_ssh_path', $ssh_path );
-
-        $ftp_host = sanitize_text_field( wp_unslash( $_POST['rb_ftp_host'] ?? get_option( 'rb_ftp_host', '' ) ) );
-        update_option( 'rb_ftp_host', $ftp_host );
-
-        $ftp_port = absint( $_POST['rb_ftp_port'] ?? get_option( 'rb_ftp_port', 21 ) ) ?: 21;
-        update_option( 'rb_ftp_port', $ftp_port );
-
-        $ftp_username = sanitize_text_field( wp_unslash( $_POST['rb_ftp_username'] ?? get_option( 'rb_ftp_username', '' ) ) );
-        update_option( 'rb_ftp_username', $ftp_username );
-
-        $ftp_password = (string) wp_unslash( $_POST['rb_ftp_password'] ?? get_option( 'rb_ftp_password', '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Passwords must be stored verbatim.
-        update_option( 'rb_ftp_password', $ftp_password );
-
-        $ftp_path = sanitize_text_field( wp_unslash( $_POST['rb_ftp_path'] ?? get_option( 'rb_ftp_path', '' ) ) );
-        update_option( 'rb_ftp_path', $ftp_path );
-
-        update_option( 'rb_ftp_passive', isset( $_POST['rb_ftp_passive'] ) ? 1 : 0 );
         // phpcs:enable WordPress.Security.NonceVerification.Missing
 
         return $protocol;
@@ -1690,38 +2120,8 @@ class Remote_Backup_Admin {
 
     private function remote_settings_ready( $protocol, $settings = array() ) {
         $protocol = $this->normalize_remote_protocol( $protocol );
-        $settings = wp_parse_args(
-            $settings,
-            array(
-                'ssh_host'     => get_option( 'rb_ssh_host', '' ),
-                'ssh_username' => get_option( 'rb_ssh_username', '' ),
-                'ssh_auth'     => get_option( 'rb_ssh_auth_method', 'key' ),
-                'ssh_password' => get_option( 'rb_ssh_password', '' ),
-                'ssh_key'      => get_option( 'rb_ssh_key', '' ),
-                'ssh_path'     => get_option( 'rb_ssh_path', '' ),
-                'ftp_host'     => get_option( 'rb_ftp_host', '' ),
-                'ftp_username' => get_option( 'rb_ftp_username', '' ),
-                'ftp_password' => get_option( 'rb_ftp_password', '' ),
-                'ftp_path'     => get_option( 'rb_ftp_path', '' ),
-            )
-        );
-
-        if ( 'ftp' === $protocol ) {
-            return function_exists( 'ftp_connect' )
-                && '' !== trim( (string) $settings['ftp_host'] )
-                && '' !== trim( (string) $settings['ftp_username'] )
-                && '' !== trim( (string) $settings['ftp_password'] )
-                && '' !== trim( (string) $settings['ftp_path'] );
-        }
-
-        $ssh_auth_ready = 'password' === $settings['ssh_auth']
-            ? '' !== trim( (string) $settings['ssh_password'] )
-            : '' !== trim( (string) $settings['ssh_key'] );
-
-        return '' !== trim( (string) $settings['ssh_host'] )
-            && '' !== trim( (string) $settings['ssh_username'] )
-            && '' !== trim( (string) $settings['ssh_path'] )
-            && $ssh_auth_ready;
+        $provider = $this->scheduler ? $this->scheduler->get_provider( $protocol ) : null;
+        return $provider ? $provider->is_ready() : false;
     }
 
     private function maybe_send_remote_backup( $backup, $context = 'Backup', $remote_mode = 'local' ) {
@@ -1761,14 +2161,62 @@ class Remote_Backup_Admin {
         );
     }
 
-    private function ssh_tools_status() {
-        $scp = ! empty( trim( shell_exec( 'which scp 2>/dev/null' ) ?? '' ) );
-        $ssh = ! empty( trim( shell_exec( 'which ssh 2>/dev/null' ) ?? '' ) );
-        $sshpass = ! empty( trim( shell_exec( 'which sshpass 2>/dev/null' ) ?? '' ) );
-        return array( 'scp' => $scp, 'ssh' => $ssh, 'sshpass' => $sshpass );
+    /* ── Render ───────────────────────────────────────── */
+
+    /**
+     * Compute backup summary stats for the summary cards row.
+     */
+    private function backup_summary_stats( array $backups ) {
+        $total   = count( $backups );
+        $db      = 0;
+        $files   = 0;
+        $remote  = 0;
+        $storage = 0;
+
+        foreach ( $backups as $b ) {
+            $scope = $b['scope'] ?? '';
+            if ( 'database' === $scope ) {
+                $db++;
+            } elseif ( 'files' === $scope ) {
+                $files++;
+            } elseif ( 'both' === $scope ) {
+                $db++;
+                $files++;
+            }
+
+            $rs = $b['remote_status'] ?? '';
+            if ( 'success' === $rs ) {
+                $remote++;
+            }
+
+            $storage += (int) ( $b['total_size'] ?? 0 );
+        }
+
+        return array(
+            'total'   => $total,
+            'db'      => $db,
+            'files'   => $files,
+            'remote'  => $remote,
+            'storage' => $storage,
+        );
     }
 
-    /* ── Render ───────────────────────────────────────── */
+    /**
+     * Render backup summary cards row matching the monitor's sp-summary pattern.
+     */
+    private function render_backup_summary_cards( array $summary ) {
+        ob_start();
+        ?>
+        <div id="rb-summary" class="sp-summary">
+            <div id="rb-summary-total" class="sp-summary-card sp-summary--neutral"><span id="rb-summary-total-num" class="sp-summary-num"><?php echo (int) $summary['total']; ?></span><span id="rb-summary-total-label" class="sp-summary-label">Backups</span></div>
+            <div id="rb-summary-db" class="sp-summary-card sp-summary--info"><span id="rb-summary-db-num" class="sp-summary-num"><?php echo (int) $summary['db']; ?></span><span id="rb-summary-db-label" class="sp-summary-label">Database</span></div>
+            <div id="rb-summary-files" class="sp-summary-card sp-summary--warning"><span id="rb-summary-files-num" class="sp-summary-num"><?php echo (int) $summary['files']; ?></span><span id="rb-summary-files-label" class="sp-summary-label">Files</span></div>
+            <div id="rb-summary-remote" class="sp-summary-card sp-summary--ok"><span id="rb-summary-remote-num" class="sp-summary-num"><?php echo (int) $summary['remote']; ?></span><span id="rb-summary-remote-label" class="sp-summary-label">Remote</span></div>
+            <div id="rb-summary-storage" class="sp-summary-card sp-summary--neutral"><span id="rb-summary-storage-num" class="sp-summary-num"><?php echo esc_html( size_format( $summary['storage'] ) ); ?></span><span id="rb-summary-storage-label" class="sp-summary-label">Storage</span></div>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
 
     public function render_page() {
         if ( ! current_user_can( 'manage_options' ) || ! $this->has_backup_features() ) {
@@ -1785,25 +2233,14 @@ class Remote_Backup_Admin {
         $sched_files_freq    = $files_schedule['frequency'] ?? 'none';
         $sched_files_time    = $files_schedule['configured_time'] ?? '02:00';
         $sched_files_weekday = $files_schedule['configured_weekday'] ?? $this->scheduler->get_schedule_weekday( 'files' );
-        $sched_remote        = $this->normalize_remote_mode( get_option( 'rb_scheduled_remote_mode', 'remote' ) );
+        $this->maybe_migrate_delivery_options();
+        $sched_remote_db     = $this->normalize_remote_mode( get_option( 'rb_scheduled_remote_mode_database', 'remote' ) );
+        $sched_remote_files  = $this->normalize_remote_mode( get_option( 'rb_scheduled_remote_mode_files', 'remote' ) );
         $manual_remote       = $this->normalize_remote_mode( get_option( 'rb_manual_remote_mode', 'local' ) );
         $retain_db           = get_option( 'rb_retain_db', 0 );
         $retain_files        = get_option( 'rb_retain_files', 0 );
         $remote_protocol     = $this->normalize_remote_protocol( get_option( 'rb_remote_protocol', 'ssh' ) );
         $remote_label        = $this->remote_protocol_label( $remote_protocol );
-        $ssh_host            = get_option( 'rb_ssh_host', '' );
-        $ssh_port            = get_option( 'rb_ssh_port', 22 );
-        $ssh_username        = get_option( 'rb_ssh_username', '' );
-        $ssh_auth            = get_option( 'rb_ssh_auth_method', 'key' );
-        $ssh_password        = get_option( 'rb_ssh_password', '' );
-        $ssh_key             = get_option( 'rb_ssh_key', '' );
-        $ssh_path            = get_option( 'rb_ssh_path', '' );
-        $ftp_host            = get_option( 'rb_ftp_host', '' );
-        $ftp_port            = get_option( 'rb_ftp_port', 21 );
-        $ftp_username        = get_option( 'rb_ftp_username', '' );
-        $ftp_password        = get_option( 'rb_ftp_password', '' );
-        $ftp_path            = get_option( 'rb_ftp_path', '' );
-        $ftp_passive         = (bool) get_option( 'rb_ftp_passive', 1 );
         $next_database       = $database_schedule['next_run_local'] ?? null;
         $next_files          = $files_schedule['next_run_local'] ?? null;
         $pull_token          = Remote_Backup_Api::get_pull_token( true );
@@ -1811,25 +2248,13 @@ class Remote_Backup_Admin {
         $catalog_url         = rest_url( 'remote-backup/v1/backups' );
         $active_job          = $this->active_job_state();
         $weekday_options     = $this->scheduler->weekday_options();
-        $remote_ready        = $this->remote_settings_ready(
-            $remote_protocol,
-            array(
-                'ssh_host'     => $ssh_host,
-                'ssh_username' => $ssh_username,
-                'ssh_auth'     => $ssh_auth,
-                'ssh_password' => $ssh_password,
-                'ssh_key'      => $ssh_key,
-                'ssh_path'     => $ssh_path,
-                'ftp_host'     => $ftp_host,
-                'ftp_username' => $ftp_username,
-                'ftp_password' => $ftp_password,
-                'ftp_path'     => $ftp_path,
-            )
-        );
-        $ftp_available       = function_exists( 'ftp_connect' );
+        $remote_ready        = $this->remote_settings_ready( $remote_protocol );
+        $providers           = $this->scheduler->get_providers();
 
         if ( ! $remote_ready ) {
-            $manual_remote = 'local';
+            $manual_remote      = 'local';
+            $sched_remote_db    = 'local';
+            $sched_remote_files = 'local';
         }
 
         wp_localize_script( 'rb-admin', 'rbAdmin', array(
@@ -1845,7 +2270,7 @@ class Remote_Backup_Admin {
             : admin_url( 'admin.php?page=savedpixel' );
 
         $saved_folders = get_option( 'rb_backup_folders', array() );
-        $skip          = array( '.', '..', '.git' );
+        $skip          = array( '.', '..', '.git', '.svn', 'node_modules' );
         $excluded_dirs = array_map(
             'trailingslashit',
             array(
@@ -1853,421 +2278,415 @@ class Remote_Backup_Admin {
                 wp_normalize_path( RB_BASE_DIR ),
             )
         );
-        $tree          = array();
+        $tree       = array();
+        $root_files = array();
         foreach ( scandir( ABSPATH ) as $item ) {
-            $item_path = trailingslashit( wp_normalize_path( ABSPATH . $item ) );
-            if ( in_array( $item, $skip, true ) || ! is_dir( ABSPATH . $item ) || in_array( $item_path, $excluded_dirs, true ) ) {
+            if ( in_array( $item, $skip, true ) ) {
                 continue;
             }
-            $children = array();
+            if ( ! is_dir( ABSPATH . $item ) ) {
+                $root_files[] = $item;
+                continue;
+            }
+            $item_path = trailingslashit( wp_normalize_path( ABSPATH . $item ) );
+            if ( in_array( $item_path, $excluded_dirs, true ) ) {
+                continue;
+            }
+            // Check if this top-level dir has any contents (files or subdirs).
+            $has_children = false;
             foreach ( scandir( ABSPATH . $item ) as $child ) {
-                $child_path = trailingslashit( wp_normalize_path( ABSPATH . $item . '/' . $child ) );
-                if ( in_array( $child, $skip, true ) || ! is_dir( ABSPATH . $item . '/' . $child ) || in_array( $child_path, $excluded_dirs, true ) ) {
+                if ( in_array( $child, $skip, true ) ) {
                     continue;
                 }
-                $children[] = $child;
+                if ( is_dir( ABSPATH . $item . '/' . $child ) ) {
+                    $child_full = trailingslashit( wp_normalize_path( ABSPATH . $item . '/' . $child ) );
+                    if ( in_array( $child_full, $excluded_dirs, true ) ) {
+                        continue;
+                    }
+                }
+                $has_children = true;
+                break;
             }
-            sort( $children );
-            $tree[ $item ] = $children;
+            $tree[ $item ] = $has_children;
         }
         ksort( $tree );
+        sort( $root_files, SORT_STRING | SORT_FLAG_CASE );
 
-        $is_checked = function ( $path ) use ( $saved_folders ) {
+        $is_saved = function ( $path ) use ( $saved_folders ) {
             if ( empty( $saved_folders ) ) {
                 return true;
             }
-
-            return in_array( $path, $saved_folders, true );
-        };
-        $parent_has_any = function ( $parent, $children ) use ( $saved_folders ) {
-            if ( empty( $saved_folders ) ) {
+            // Exact match.
+            if ( in_array( $path, $saved_folders, true ) ) {
                 return true;
             }
-            if ( in_array( $parent, $saved_folders, true ) ) {
-                return true;
-            }
-            foreach ( $children as $child ) {
-                if ( in_array( $parent . '/' . $child, $saved_folders, true ) ) {
+            // Check if any saved folder is a descendant of this path.
+            $prefix = $path . '/';
+            foreach ( $saved_folders as $sf ) {
+                if ( 0 === strpos( $sf, $prefix ) ) {
                     return true;
                 }
             }
             return false;
         };
+        ?><?php
+        $summary = $this->backup_summary_stats( $backups );
         ?><?php savedpixel_admin_page_start( 'sprb-page' ); ?>
                 <header id="rb-header" class="sp-page-header">
                     <div id="rb-header-main">
                         <h1 id="rb-header-title" class="sp-page-title">SavedPixel Remote Backup</h1>
-                        <p id="rb-header-desc" class="sp-page-desc sp-page-desc--wide">Run manual backups, configure scheduled retention, and manage remote delivery or pull-based access from a single backup workspace.</p>
+                        <p id="rb-header-desc" class="sp-page-desc sp-u-max-w-none">Run manual backups, configure scheduled retention, and manage remote delivery or pull-based access from a single backup workspace.</p>
                     </div>
                     <div id="rb-header-actions" class="sp-header-actions">
                         <a id="rb-back-link" class="button" href="<?php echo esc_url( $overview_url ); ?>">Back to Overview</a>
+                        <div id="rb-header-actions-right" class="sp-header-actions-right">
+                            <button type="button" id="rb-backup-now-btn" class="button" <?php disabled( ! $writable ); ?>>Backup Now</button>
+                            <button type="button" id="rb-open-settings-btn" class="button" data-open-modal="rb-settings-modal">Settings</button>
+                            <button type="button" id="rb-save-settings-btn" class="button button-primary">Save Settings</button>
+                        </div>
                     </div>
                 </header>
+                <form id="rb-header-save-form" method="post" style="display:none;">
+                    <?php wp_nonce_field( 'rb_schedule', 'rb_schedule_nonce', false ); ?>
+                    <?php wp_nonce_field( 'rb_remote', 'rb_remote_nonce', false ); ?>
+                    <?php wp_nonce_field( 'rb_pull_access', 'rb_pull_access_nonce', false ); ?>
+                    <?php wp_referer_field(); ?>
+                    <input type="hidden" name="rb_save_settings" id="rb-save-settings-flag" value="1">
+                    <div id="rb-header-save-payload"></div>
+                </form>
 
                 <?php // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Notice HTML is built by notice_html(). ?>
                 <?php echo $this->notice; ?>
 
                 <?php if ( ! $writable ) : ?>
-                    <div class="notice notice-error"><p><strong>Storage not writable.</strong> Backups cannot run until <code><?php echo esc_html( RB_STORAGE_DIR ); ?></code> is writable.</p></div>
+                    <div id="rb-storage-notice" class="notice notice-error"><strong id="rb-storage-notice-title">Storage not writable.</strong> Backups cannot run until <code id="rb-storage-path"><?php echo esc_html( RB_STORAGE_DIR ); ?></code> is writable.</div>
                 <?php endif; ?>
 
-                <div id="rb-grid" class="sp-grid">
-                    <div id="rb-schedule-card" class="sp-card sp-card--schedule">
-                        <div id="rb-schedule-body" class="sp-card__body">
-                            <h2 id="rb-schedule-title"><span class="dashicons dashicons-cloud-saved"></span> Backups</h2>
-                            <p class="sp-desc">Create a one-time backup right now. Choose whether to keep it local only or upload it to remote storage after it finishes.</p>
-                            <table id="rb-manual-delivery-table" class="form-table sp-form-table">
-                                <tr id="rb-manual-delivery-row">
-                                    <th id="rb-manual-delivery-label" scope="row"><label for="rb_manual_remote_mode">Delivery</label></th>
-                                    <td id="rb-manual-delivery-field">
-                                        <select id="rb_manual_remote_mode">
-                                            <option value="local" <?php selected( $manual_remote, 'local' ); ?>>Backup normally</option>
-                                            <option value="remote" <?php selected( $manual_remote, 'remote' ); ?> <?php disabled( ! $remote_ready ); ?>>Backup + send to remote storage</option>
-                                        </select>
-                                        <p class="description">
-                                            <?php echo $remote_ready ? esc_html( "Remote delivery uses the {$remote_label} settings in the panel on the right." ) : esc_html( 'Configure remote storage settings to enable remote delivery.' ); ?>
-                                        </p>
-                                    </td>
-                                </tr>
-                            </table>
-                            <div class="sp-actions" id="sp-manual-actions">
-                                <button type="button" class="button sp-btn sp-btn--db sp-ajax-backup" data-scope="database" <?php disabled( ! $writable ); ?>>
-                                    <span class="dashicons dashicons-database"></span> Database
-                                </button>
-                                <button type="button" class="button sp-btn sp-btn--files sp-ajax-backup" data-scope="files" <?php disabled( ! $writable ); ?>>
-                                    <span class="dashicons dashicons-media-archive"></span> Files
-                                </button>
-                                <button type="button" class="button button-primary sp-btn sp-btn--both sp-ajax-backup" data-scope="both" <?php disabled( ! $writable ); ?>>
-                                    <span class="dashicons dashicons-admin-site-alt3"></span> Everything
-                                </button>
+                <div id="rb-backup-popup-overlay" class="sp-modal-overlay" style="display:none;">
+                    <div id="rb-backup-popup" class="sp-modal">
+                        <div id="rb-backup-popup-header" class="sp-modal__header">
+                            <h3 id="rb-backup-popup-title" class="sp-modal__title">Backup Now</h3>
+                            <button type="button" id="rb-backup-popup-close" class="sp-modal__close" aria-label="Close">&times;</button>
+                        </div>
+                        <div id="rb-backup-popup-body" class="sp-modal__body">
+                            <p id="rb-backup-popup-desc" class="sp-modal__desc">Choose what to back up:</p>
+                            <div id="rb-backup-popup-options" class="sp-modal__options">
+                                <label id="rb-backup-opt-database" class="sp-modal__option" for="rb-backup-scope-database">
+                                    <input type="radio" id="rb-backup-scope-database" name="rb_backup_scope" value="database" checked>
+                                    <span id="rb-backup-opt-database-icon" class="dashicons dashicons-database"></span>
+                                    <span id="rb-backup-opt-database-text">Database Only</span>
+                                </label>
+                                <label id="rb-backup-opt-files" class="sp-modal__option" for="rb-backup-scope-files">
+                                    <input type="radio" id="rb-backup-scope-files" name="rb_backup_scope" value="files">
+                                    <span id="rb-backup-opt-files-icon" class="dashicons dashicons-media-archive"></span>
+                                    <span id="rb-backup-opt-files-text">Files Only</span>
+                                </label>
+                                <label id="rb-backup-opt-both" class="sp-modal__option" for="rb-backup-scope-both">
+                                    <input type="radio" id="rb-backup-scope-both" name="rb_backup_scope" value="both">
+                                    <span id="rb-backup-opt-both-icon" class="dashicons dashicons-admin-site-alt3"></span>
+                                    <span id="rb-backup-opt-both-text">Everything</span>
+                                </label>
                             </div>
-                            <p id="sp-manual-note" class="description" style="margin-top:6px;"><strong>Everything</strong> backs up the database plus only the folders selected below. <strong>Files</strong> also uses the selection below.</p>
+                            <?php if ( $remote_ready ) : ?>
+                                <hr id="rb-backup-popup-divider" class="sp-modal__divider">
+                                <label id="rb-backup-opt-remote" class="sp-modal__option sp-modal__option--remote" for="rb_backup_send_remote">
+                                    <input type="checkbox" id="rb_backup_send_remote" value="1">
+                                    <span id="rb-backup-opt-remote-icon" class="dashicons dashicons-cloud-upload"></span>
+                                    <span id="rb-backup-opt-remote-text">Also send to <?php echo esc_html( $remote_label ); ?></span>
+                                </label>
+                                <p id="rb-backup-remote-note" class="description" style="margin-top:4px;">The backup is created locally first, then uploaded to remote storage.</p>
+                            <?php endif; ?>
+                        </div>
+                        <div id="rb-backup-popup-footer" class="sp-modal__footer">
+                            <button type="button" id="rb-backup-popup-cancel" class="button">Cancel</button>
+                            <button type="button" id="rb-backup-popup-start" class="button button-primary">Start Backup</button>
+                        </div>
+                    </div>
+                </div>
 
-                            <div class="sp-folder-picker" id="sp-folder-picker">
-                                <p class="sp-folder-label"><span class="dashicons dashicons-open-folder"></span> <strong>Folders to include in file backups:</strong></p>
-                                <div class="sp-folder-tree">
-                                    <?php foreach ( $tree as $dir => $children ) : ?>
-                                        <?php
-                                        $has_children  = ! empty( $children );
-                                        $dir_checked   = $has_children ? $parent_has_any( $dir, $children ) : $is_checked( $dir );
-                                        $parent_direct = in_array( $dir, $saved_folders, true );
-                                        ?>
-                                        <div class="sp-tree-node<?php echo $has_children ? ' sp-tree-node--parent' : ''; ?>">
-                                            <div class="sp-tree-row">
+                <div id="rb-auth-modal-overlay" class="sp-modal-overlay" style="display:none;">
+                    <div id="rb-auth-modal" class="sp-modal">
+                        <div id="rb-auth-modal-header" class="sp-modal__header">
+                            <h3 id="rb-auth-modal-title" class="sp-modal__title">Authorize Cloud Storage</h3>
+                            <button type="button" id="rb-auth-modal-close" class="sp-modal__close" aria-label="Close">&times;</button>
+                        </div>
+                        <form id="rb-auth-modal-form">
+                            <div id="rb-auth-modal-body" class="sp-modal__body">
+                                <p id="rb-auth-modal-step1" class="sp-modal__desc"><strong id="rb-auth-modal-step1-label">Step 1</strong> &mdash; Open the authorization page and approve access.</p>
+                                <p id="rb-auth-modal-link-wrap" style="margin-top:8px;">
+                                    <a id="rb-auth-modal-link" href="#" target="_blank" rel="noopener" class="button">Open Authorization Page</a>
+                                </p>
+                                <hr id="rb-auth-modal-divider" class="sp-modal__divider">
+                                <p id="rb-auth-modal-step2" class="sp-modal__desc"><strong id="rb-auth-modal-step2-label">Step 2</strong> &mdash; Paste the authorization code from the redirect URL.</p>
+                                <input type="text" id="rb-auth-modal-code" class="regular-text" placeholder="Paste authorization code here" style="margin-top:8px;width:100%;">
+                                <span id="rb-auth-modal-status" style="display:block;margin-top:8px;"></span>
+                                <hr id="rb-auth-modal-divider2" class="sp-modal__divider">
+                                <p id="rb-auth-modal-custom-toggle-wrap">
+                                    <a id="rb-auth-modal-custom-toggle" href="#" style="font-size:12px;">Use custom OAuth credentials</a>
+                                </p>
+                                <div id="rb-auth-modal-custom-fields" style="display:none;margin-top:8px;">
+                                    <label id="rb-auth-modal-client-id-label" for="rb-auth-modal-client-id" style="display:block;font-size:12px;margin-bottom:4px;">Client ID</label>
+                                    <input type="text" id="rb-auth-modal-client-id" class="regular-text" style="width:100%;" placeholder="Leave blank to use built-in credentials">
+                                    <label id="rb-auth-modal-client-secret-label" for="rb-auth-modal-client-secret" style="display:block;font-size:12px;margin-top:8px;margin-bottom:4px;">Client Secret</label>
+                                    <input type="password" id="rb-auth-modal-client-secret" class="regular-text" style="width:100%;" placeholder="Leave blank to use built-in credentials" autocomplete="off">
+                                </div>
+                            </div>
+                            <div id="rb-auth-modal-footer" class="sp-modal__footer">
+                                <button type="button" id="rb-auth-modal-cancel" class="button">Cancel</button>
+                                <button type="button" id="rb-auth-modal-test" class="button" style="display:none;">Test Connection</button>
+                                <button type="button" id="rb-auth-modal-submit" class="button button-primary">Submit Code</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <?php // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Helper returns controlled admin markup. ?>
+                <?php echo $this->render_backup_summary_cards( $summary ); ?>
+
+                <!-- ── Settings Modal (tabbed) ─────────────────── -->
+                <div id="rb-settings-modal" class="sp-modal-overlay" style="display:none;">
+                    <div id="rb-settings-modal-dialog" class="sp-modal sp-modal--wide">
+                        <div id="rb-settings-modal-header" class="sp-modal__header">
+                            <h3 id="rb-settings-modal-title" class="sp-modal__title">
+                                <span id="rb-settings-modal-icon" class="dashicons dashicons-admin-generic"></span>
+                                Backup Settings
+                            </h3>
+                            <button type="button" id="rb-settings-modal-close" class="sp-modal__close" aria-label="Close">&times;</button>
+                        </div>
+
+                        <div id="rb-settings-tabs" class="sp-modal-tabs">
+                            <button type="button" id="rb-tab-database" class="sp-tab-button active" data-tab="rb-panel-database">Database</button>
+                            <button type="button" id="rb-tab-files-schedule" class="sp-tab-button" data-tab="rb-panel-files-schedule">Files</button>
+                            <button type="button" id="rb-tab-files" class="sp-tab-button" data-tab="rb-panel-files">File Selection</button>
+                            <button type="button" id="rb-tab-remote" class="sp-tab-button" data-tab="rb-panel-remote">Remote Storage</button>
+                            <button type="button" id="rb-tab-pull" class="sp-tab-button" data-tab="rb-panel-pull">Pull Access</button>
+                        </div>
+
+                        <!-- Tab 1: Database Schedule -->
+                        <div id="rb-panel-database" class="sp-tab-content active">
+                            <?php if ( 'none' === $sched_db_freq ) : ?>
+                                <div id="rb-db-notice" class="sp-notice sp-notice--error"><strong id="rb-db-notice-icon">Database backups</strong> are currently disabled.</div>
+                            <?php endif; ?>
+                            <form id="rb-schedule-form-db" method="post">
+                                <?php wp_nonce_field( 'rb_schedule', 'rb_schedule_nonce', false ); ?>
+                                <?php wp_referer_field(); ?>
+                                <div id="rb-db-row-freq-time" class="sp-form-row">
+                                    <div id="rb-db-frequency-field" class="sp-form-group">
+                                        <label id="rb-db-frequency-label" class="sp-form-label" for="rb_schedule_database_frequency">Frequency</label>
+                                        <select name="rb_schedule_database_frequency" id="rb_schedule_database_frequency" class="sp-select">
+                                            <option value="none" <?php selected( $sched_db_freq, 'none' ); ?>>Disabled</option>
+                                            <option value="hourly" <?php selected( $sched_db_freq, 'hourly' ); ?>>Every Hour</option>
+                                            <option value="rb_every_6h" <?php selected( $sched_db_freq, 'rb_every_6h' ); ?>>Every 6 Hours</option>
+                                            <option value="rb_every_12h" <?php selected( $sched_db_freq, 'rb_every_12h' ); ?>>Every 12 Hours</option>
+                                            <option value="twicedaily" <?php selected( $sched_db_freq, 'twicedaily' ); ?>>Twice Daily</option>
+                                            <option value="daily" <?php selected( $sched_db_freq, 'daily' ); ?>>Daily</option>
+                                            <option value="weekly" <?php selected( $sched_db_freq, 'weekly' ); ?>>Weekly</option>
+                                        </select>
+                                    </div>
+                                    <div id="rb-db-time-field" class="sp-form-group">
+                                        <label id="rb-db-time-label" class="sp-form-label" for="rb_schedule_database_time">Time</label>
+                                        <input type="time" name="rb_schedule_database_time" id="rb_schedule_database_time" class="sp-input sp-input-time" value="<?php echo esc_attr( $sched_db_time ); ?>" step="60">
+
+                                    </div>
+                                </div>
+                                <div id="rb-db-weekday-field" class="sp-form-group" <?php echo 'weekly' !== $sched_db_freq ? 'style="display:none"' : ''; ?>>
+                                    <label id="rb-db-weekday-label" class="sp-form-label" for="rb_schedule_database_weekday">Day</label>
+                                    <select name="rb_schedule_database_weekday" id="rb_schedule_database_weekday" class="sp-select">
+                                        <?php foreach ( $weekday_options as $weekday_value => $weekday_label ) : ?>
+                                            <option value="<?php echo esc_attr( $weekday_value ); ?>" <?php selected( $sched_db_weekday, $weekday_value ); ?>><?php echo esc_html( $weekday_label ); ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <p id="rb-db-weekday-help" class="sp-form-description">Used only when Frequency is set to Weekly.</p>
+                                </div>
+                                <div id="rb-db-row-retain-delivery" class="sp-form-row">
+                                    <div id="rb-db-retention-field" class="sp-form-group">
+                                        <label id="rb-db-retention-label" class="sp-form-label" for="rb_retain_db">Retention</label>
+                                        <input type="number" name="rb_retain_db" id="rb_retain_db" class="sp-input sp-input-number" value="<?php echo esc_attr( $retain_db ); ?>" min="0" max="100">
+
+                                    </div>
+                                    <div id="rb-db-delivery-field" class="sp-form-group">
+                                        <label id="rb-db-delivery-label" class="sp-form-label" for="rb_scheduled_remote_mode_database">Scheduled Delivery</label>
+                                        <select name="rb_scheduled_remote_mode_database" id="rb_scheduled_remote_mode_database" class="sp-select">
+                                            <option value="local" <?php selected( $sched_remote_db, 'local' ); ?>>Backup normally</option>
+                                            <option value="remote" <?php selected( $sched_remote_db, 'remote' ); ?> <?php disabled( ! $remote_ready ); ?>>Backup + send to remote storage</option>
+                                        </select>
+
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Tab 2: Files Schedule -->
+                        <div id="rb-panel-files-schedule" class="sp-tab-content">
+                            <?php if ( 'none' === $sched_files_freq ) : ?>
+                                <div id="rb-files-schedule-notice" class="sp-notice sp-notice--error"><strong id="rb-files-notice-icon">File backups</strong> are currently disabled.</div>
+                            <?php endif; ?>
+                            <form id="rb-schedule-form-files" method="post">
+                                <?php wp_nonce_field( 'rb_schedule', 'rb_schedule_nonce_files', false ); ?>
+                                <?php wp_referer_field(); ?>
+                                <div id="rb-files-row-freq-time" class="sp-form-row">
+                                    <div id="rb-files-frequency-field" class="sp-form-group">
+                                        <label id="rb-files-frequency-label" class="sp-form-label" for="rb_schedule_files_frequency">Frequency</label>
+                                        <select name="rb_schedule_files_frequency" id="rb_schedule_files_frequency" class="sp-select">
+                                            <option value="none" <?php selected( $sched_files_freq, 'none' ); ?>>Disabled</option>
+                                            <option value="hourly" <?php selected( $sched_files_freq, 'hourly' ); ?>>Every Hour</option>
+                                            <option value="rb_every_6h" <?php selected( $sched_files_freq, 'rb_every_6h' ); ?>>Every 6 Hours</option>
+                                            <option value="rb_every_12h" <?php selected( $sched_files_freq, 'rb_every_12h' ); ?>>Every 12 Hours</option>
+                                            <option value="twicedaily" <?php selected( $sched_files_freq, 'twicedaily' ); ?>>Twice Daily</option>
+                                            <option value="daily" <?php selected( $sched_files_freq, 'daily' ); ?>>Daily</option>
+                                            <option value="weekly" <?php selected( $sched_files_freq, 'weekly' ); ?>>Weekly</option>
+                                        </select>
+                                    </div>
+                                    <div id="rb-files-time-field" class="sp-form-group">
+                                        <label id="rb-files-time-label" class="sp-form-label" for="rb_schedule_files_time">Time</label>
+                                        <input type="time" name="rb_schedule_files_time" id="rb_schedule_files_time" class="sp-input sp-input-time" value="<?php echo esc_attr( $sched_files_time ); ?>" step="60">
+
+                                    </div>
+                                </div>
+                                <div id="rb-files-weekday-field" class="sp-form-group" <?php echo 'weekly' !== $sched_files_freq ? 'style="display:none"' : ''; ?>>
+                                    <label id="rb-files-weekday-label" class="sp-form-label" for="rb_schedule_files_weekday">Day</label>
+                                    <select name="rb_schedule_files_weekday" id="rb_schedule_files_weekday" class="sp-select">
+                                        <?php foreach ( $weekday_options as $weekday_value => $weekday_label ) : ?>
+                                            <option value="<?php echo esc_attr( $weekday_value ); ?>" <?php selected( $sched_files_weekday, $weekday_value ); ?>><?php echo esc_html( $weekday_label ); ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <p id="rb-files-weekday-help" class="sp-form-description">Used only when Frequency is set to Weekly.</p>
+                                </div>
+                                <div id="rb-files-row-retain-delivery" class="sp-form-row">
+                                    <div id="rb-files-retention-field" class="sp-form-group">
+                                        <label id="rb-files-retention-label" class="sp-form-label" for="rb_retain_files">Retention</label>
+                                        <input type="number" name="rb_retain_files" id="rb_retain_files" class="sp-input sp-input-number" value="<?php echo esc_attr( $retain_files ); ?>" min="0" max="100">
+
+                                    </div>
+                                    <div id="rb-files-delivery-field" class="sp-form-group">
+                                        <label id="rb-files-delivery-label" class="sp-form-label" for="rb_scheduled_remote_mode_files">Scheduled Delivery</label>
+                                        <select name="rb_scheduled_remote_mode_files" id="rb_scheduled_remote_mode_files" class="sp-select">
+                                            <option value="local" <?php selected( $sched_remote_files, 'local' ); ?>>Backup normally</option>
+                                            <option value="remote" <?php selected( $sched_remote_files, 'remote' ); ?> <?php disabled( ! $remote_ready ); ?>>Backup + send to remote storage</option>
+                                        </select>
+
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Tab 3: Remote Storage -->
+                        <div id="rb-panel-remote" class="sp-tab-content">
+                            <form id="rb-remote-form" method="post">
+                                <?php wp_nonce_field( 'rb_remote', 'rb_remote_nonce', false ); ?>
+                                <?php wp_referer_field(); ?>
+                                <?php foreach ( $providers as $key => $provider ) : ?>
+                                    <div id="rb-remote-status-<?php echo esc_attr( $key ); ?>" class="sp-protocol-<?php echo esc_attr( $key ); ?>" <?php echo $key !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
+                                        <?php $provider->render_status_banner(); ?>
+                                    </div>
+                                <?php endforeach; ?>
+                                <div id="rb-remote-provider-field" class="sp-form-group">
+                                    <label id="rb-remote-provider-label" class="sp-form-label" for="rb_remote_protocol">Provider</label>
+                                    <select name="rb_remote_protocol" id="rb_remote_protocol" class="sp-select">
+                                        <?php foreach ( $providers as $key => $provider ) : ?>
+                                            <option value="<?php echo esc_attr( $key ); ?>" <?php selected( $remote_protocol, $key ); ?>><?php echo esc_html( $provider->get_label() ); ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </div>
+                                <table id="rb-remote-table" class="form-table sp-form-table">
+                                    <?php foreach ( $providers as $key => $provider ) : ?>
+                                        <tbody id="rb-remote-fields-<?php echo esc_attr( $key ); ?>" class="sp-protocol-<?php echo esc_attr( $key ); ?>" <?php echo $key !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
+                                            <?php $provider->render_settings_fields( $provider->get_settings() ); ?>
+                                        </tbody>
+                                    <?php endforeach; ?>
+                                </table>
+                                <div id="rb-remote-actions" style="margin-top:12px;display:flex;gap:8px;">
+                                    <button type="submit" id="rb-test-remote-btn" name="rb_test_remote" value="1" class="button" form="rb-remote-form">Test Connection</button>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Tab 4: Pull Access -->
+                        <div id="rb-panel-pull" class="sp-tab-content">
+                            <div id="rb-pull-status-notice" class="sp-notice sp-notice--success"><strong>Pull access</strong> is enabled for this site.</div>
+                            <form id="rb-pull-form" method="post">
+                                <?php wp_nonce_field( 'rb_pull_access', 'rb_pull_access_nonce', false ); ?>
+                                <?php wp_referer_field(); ?>
+                                <div id="rb-pull-token-field" class="sp-form-group">
+                                    <label id="rb-pull-token-label" class="sp-form-label">Pull Token</label>
+                                    <div id="rb-pull-token-display" class="sp-code"><?php echo esc_html( $pull_token ); ?></div>
+                                    <p id="rb-pull-token-help" class="sp-form-description">The monitor plugin sends this token as <code id="rb-pull-token-header">X-RB-Pull-Token</code> when it reads the catalog and downloads backup artifacts.</p>
+                                </div>
+                                <div id="rb-pull-actions" class="sp-form-group">
+                                    <label id="rb-pull-actions-label" class="sp-form-label">Token Actions</label>
+                                    <div id="rb-pull-actions-row" style="display:flex;gap:8px;flex-wrap:wrap;">
+                                        <button type="button" id="rb-copy-token-btn" class="button">Copy Token</button>
+                                        <button type="submit" id="rb-regenerate-pull-token-btn" name="rb_regenerate_pull_token" value="1" class="button" form="rb-pull-form" onclick="return confirm('Regenerate the pull token? Existing monitors will stop working until updated.');">Regenerate</button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Tab 5: File Selection -->
+                        <div id="rb-panel-files" class="sp-tab-content">
+                            <div id="rb-files-notice" class="sp-notice">Select which files and folders to include in file backups.</div>
+                            <div id="rb-files-toolbar">
+                                <div id="rb-files-bulk-actions" class="sp-actions">
+                                    <button type="button" class="button button-small" id="sp-folders-all">Select All</button>
+                                    <button type="button" class="button button-small" id="sp-folders-none">Deselect All</button>
+                                </div>
+                            </div>
+                            <div id="sp-folder-picker">
+                                <div id="sp-folder-tree" class="sp-folder-tree">
+                                    <?php foreach ( $tree as $dir => $has_children ) : ?>
+                                        <?php $dir_slug = sanitize_title( $dir ); ?>
+                                        <div id="sp-node-<?php echo esc_attr( $dir_slug ); ?>" class="sp-tree-node<?php echo $has_children ? ' sp-tree-node--parent' : ''; ?>" data-path="<?php echo esc_attr( $dir ); ?>">
+                                            <div id="sp-row-<?php echo esc_attr( $dir_slug ); ?>" class="sp-tree-row">
                                                 <?php if ( $has_children ) : ?>
-                                                    <span class="sp-tree-toggle"></span>
+                                                    <span id="sp-toggle-<?php echo esc_attr( $dir_slug ); ?>" class="sp-tree-toggle"><span class="dashicons dashicons-arrow-right-alt2"></span></span>
                                                 <?php else : ?>
-                                                    <span class="sp-tree-spacer"></span>
+                                                    <span id="sp-spacer-<?php echo esc_attr( $dir_slug ); ?>" class="sp-tree-spacer"></span>
                                                 <?php endif; ?>
-                                                <label class="sp-folder-item">
-                                                    <input type="checkbox" class="sp-folder-cb" value="<?php echo esc_attr( $dir ); ?>" <?php checked( $dir_checked ); ?> data-children="<?php echo $has_children ? '1' : '0'; ?>">
-                                                    <span class="dashicons dashicons-category"></span>
-                                                    <?php echo esc_html( $dir ); ?>/
+                                                <label id="sp-label-<?php echo esc_attr( $dir_slug ); ?>" class="sp-folder-item" for="sp-folder-cb-<?php echo esc_attr( $dir_slug ); ?>">
+                                                    <input type="checkbox" id="sp-folder-cb-<?php echo esc_attr( $dir_slug ); ?>" class="sp-folder-cb" value="<?php echo esc_attr( $dir ); ?>" <?php checked( $is_saved( $dir ) ); ?> data-has-children="<?php echo $has_children ? '1' : '0'; ?>">
+                                                    <span id="sp-folder-icon-<?php echo esc_attr( $dir_slug ); ?>" class="dashicons dashicons-portfolio"></span>
+                                                    <span id="sp-folder-text-<?php echo esc_attr( $dir_slug ); ?>"><?php echo esc_html( $dir ); ?>/</span>
                                                 </label>
                                             </div>
                                             <?php if ( $has_children ) : ?>
-                                                <div class="sp-tree-children" style="display:none;">
-                                                    <?php foreach ( $children as $child ) : ?>
-                                                        <?php
-                                                        $child_path    = $dir . '/' . $child;
-                                                        $child_checked = empty( $saved_folders ) || $parent_direct || in_array( $child_path, $saved_folders, true );
-                                                        ?>
-                                                        <div class="sp-tree-row sp-tree-row--child">
-                                                            <span class="sp-tree-spacer"></span>
-                                                            <label class="sp-folder-item">
-                                                                <input type="checkbox" class="sp-folder-cb sp-child-cb" value="<?php echo esc_attr( $child_path ); ?>" data-parent="<?php echo esc_attr( $dir ); ?>" <?php checked( $child_checked ); ?>>
-                                                                <span class="dashicons dashicons-category"></span>
-                                                                <?php echo esc_html( $child ); ?>/
-                                                            </label>
-                                                        </div>
-                                                    <?php endforeach; ?>
-                                                </div>
+                                                <div id="sp-children-<?php echo esc_attr( $dir_slug ); ?>" class="sp-tree-children" style="display:none;"></div>
                                             <?php endif; ?>
                                         </div>
                                     <?php endforeach; ?>
-                                </div>
-                                <div class="sp-folder-actions">
-                                    <button type="button" class="button button-small" id="sp-folders-all">Select All</button>
-                                    <button type="button" class="button button-small" id="sp-folders-none">Deselect All</button>
-                                    <button type="button" class="button button-small button-primary" id="sp-folders-save">Save Selection</button>
-                                    <span id="sp-folders-saved" class="sp-folders-saved" style="display:none;">✓ Saved</span>
+                                    <?php foreach ( $root_files as $file ) : ?>
+                                        <?php $file_slug = sanitize_title( $file ); ?>
+                                        <div id="sp-file-<?php echo esc_attr( $file_slug ); ?>" class="sp-tree-node sp-tree-node--file" data-path="<?php echo esc_attr( $file ); ?>">
+                                            <div id="sp-file-row-<?php echo esc_attr( $file_slug ); ?>" class="sp-tree-row">
+                                                <span id="sp-file-spacer-<?php echo esc_attr( $file_slug ); ?>" class="sp-tree-spacer"></span>
+                                                <label id="sp-label-file-<?php echo esc_attr( $file_slug ); ?>" class="sp-file-item" for="sp-file-cb-<?php echo esc_attr( $file_slug ); ?>">
+                                                    <input type="checkbox" id="sp-file-cb-<?php echo esc_attr( $file_slug ); ?>" class="sp-folder-cb" value="<?php echo esc_attr( $file ); ?>" <?php checked( $is_saved( $file ) ); ?>>
+                                                    <span id="sp-file-icon-<?php echo esc_attr( $file_slug ); ?>" class="dashicons dashicons-media-default"></span>
+                                                    <span id="sp-file-text-<?php echo esc_attr( $file_slug ); ?>"><?php echo esc_html( $file ); ?></span>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
                                 </div>
                             </div>
-
-                            <div id="sp-progress-overlay" class="sp-progress-overlay" style="display:none;">
-                                <span class="dashicons dashicons-update sp-spin"></span>
-                                <span id="sp-progress-text">Starting backup…</span>
+                            <div id="rb-files-save-row" style="margin-top:12px;display:flex;align-items:center;gap:8px;">
+                                <button type="button" id="sp-folders-save" class="button button-primary">Save Selection</button>
+                                <span id="sp-folders-saved" class="sp-folders-saved" style="display:none;">Saved</span>
+                                <span id="rb-files-count" class="sp-badge sp-badge--neutral" style="margin-left:auto;"><?php echo esc_html( empty( $saved_folders ) ? 'All items included' : sprintf( '%d saved item%s', count( $saved_folders ), 1 === count( $saved_folders ) ? '' : 's' ) ); ?></span>
                             </div>
+                        </div>
 
-                            <hr class="sp-divider">
-
-                            <h3 id="rb-schedule-subtitle" class="sp-segment-title"><span class="dashicons dashicons-clock"></span> Scheduled Backups</h3>
-                            <?php if ( $next_database || $next_files ) : ?>
-                                <div class="sp-note">
-                                    <?php if ( $next_database ) : ?>
-                                        <p>Next database run: <strong><?php echo esc_html( mysql2date( 'M j, Y @ H:i', $next_database ) ); ?></strong></p>
-                                    <?php endif; ?>
-                                    <?php if ( $next_files ) : ?>
-                                        <p>Next files run: <strong><?php echo esc_html( mysql2date( 'M j, Y @ H:i', $next_files ) ); ?></strong></p>
-                                    <?php endif; ?>
-                                </div>
-                            <?php endif; ?>
-
-                            <form id="rb-schedule-form" method="post">
-                                <?php wp_nonce_field( 'rb_schedule' ); ?>
-                                <input type="hidden" name="rb_save_schedule" value="1">
-                                <table id="rb-schedule-table" class="form-table sp-form-table">
-                                    <tr id="rb-row-db-frequency">
-                                        <th><label for="rb_schedule_database_frequency">Database Frequency</label></th>
-                                        <td>
-                                            <select name="rb_schedule_database_frequency" id="rb_schedule_database_frequency">
-                                                <option value="none" <?php selected( $sched_db_freq, 'none' ); ?>>Disabled</option>
-                                                <option value="hourly" <?php selected( $sched_db_freq, 'hourly' ); ?>>Every Hour</option>
-                                                <option value="rb_every_6h" <?php selected( $sched_db_freq, 'rb_every_6h' ); ?>>Every 6 Hours</option>
-                                                <option value="rb_every_12h" <?php selected( $sched_db_freq, 'rb_every_12h' ); ?>>Every 12 Hours</option>
-                                                <option value="twicedaily" <?php selected( $sched_db_freq, 'twicedaily' ); ?>>Twice Daily</option>
-                                                <option value="daily" <?php selected( $sched_db_freq, 'daily' ); ?>>Daily</option>
-                                                <option value="weekly" <?php selected( $sched_db_freq, 'weekly' ); ?>>Weekly</option>
-                                            </select>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb-row-db-time">
-                                        <th><label for="rb_schedule_database_time">Database Time</label></th>
-                                        <td>
-                                            <input type="time" name="rb_schedule_database_time" id="rb_schedule_database_time" value="<?php echo esc_attr( $sched_db_time ); ?>" step="60">
-                                            <p class="description">Uses the WordPress site timezone. Hourly schedules use the minutes portion.</p>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb_schedule_database_weekday_row" <?php echo 'weekly' !== $sched_db_freq ? 'style="display:none"' : ''; ?>>
-                                        <th><label for="rb_schedule_database_weekday">Database Day</label></th>
-                                        <td>
-                                            <select name="rb_schedule_database_weekday" id="rb_schedule_database_weekday">
-                                                <?php foreach ( $weekday_options as $weekday_value => $weekday_label ) : ?>
-                                                    <option value="<?php echo esc_attr( $weekday_value ); ?>" <?php selected( $sched_db_weekday, $weekday_value ); ?>><?php echo esc_html( $weekday_label ); ?></option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                            <p class="description">Used only when Database Frequency is set to Weekly.</p>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb-row-files-frequency">
-                                        <th><label for="rb_schedule_files_frequency">Files Frequency</label></th>
-                                        <td>
-                                            <select name="rb_schedule_files_frequency" id="rb_schedule_files_frequency">
-                                                <option value="none" <?php selected( $sched_files_freq, 'none' ); ?>>Disabled</option>
-                                                <option value="hourly" <?php selected( $sched_files_freq, 'hourly' ); ?>>Every Hour</option>
-                                                <option value="rb_every_6h" <?php selected( $sched_files_freq, 'rb_every_6h' ); ?>>Every 6 Hours</option>
-                                                <option value="rb_every_12h" <?php selected( $sched_files_freq, 'rb_every_12h' ); ?>>Every 12 Hours</option>
-                                                <option value="twicedaily" <?php selected( $sched_files_freq, 'twicedaily' ); ?>>Twice Daily</option>
-                                                <option value="daily" <?php selected( $sched_files_freq, 'daily' ); ?>>Daily</option>
-                                                <option value="weekly" <?php selected( $sched_files_freq, 'weekly' ); ?>>Weekly</option>
-                                            </select>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb-row-files-time">
-                                        <th><label for="rb_schedule_files_time">Files Time</label></th>
-                                        <td>
-                                            <input type="time" name="rb_schedule_files_time" id="rb_schedule_files_time" value="<?php echo esc_attr( $sched_files_time ); ?>" step="60">
-                                            <p class="description">Uses the WordPress site timezone. Daily and weekly schedules run at this time. Every 6 hours, every 12 hours, and twice daily use it as the anchor time. Hourly uses the minutes portion.</p>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb_schedule_files_weekday_row" <?php echo 'weekly' !== $sched_files_freq ? 'style="display:none"' : ''; ?>>
-                                        <th><label for="rb_schedule_files_weekday">Files Day</label></th>
-                                        <td>
-                                            <select name="rb_schedule_files_weekday" id="rb_schedule_files_weekday">
-                                                <?php foreach ( $weekday_options as $weekday_value => $weekday_label ) : ?>
-                                                    <option value="<?php echo esc_attr( $weekday_value ); ?>" <?php selected( $sched_files_weekday, $weekday_value ); ?>><?php echo esc_html( $weekday_label ); ?></option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                            <p class="description">Used only when Files Frequency is set to Weekly.</p>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb-row-scheduled-delivery">
-                                        <th><label for="rb_scheduled_remote_mode">Delivery</label></th>
-                                        <td>
-                                            <select name="rb_scheduled_remote_mode" id="rb_scheduled_remote_mode">
-                                                <option value="local" <?php selected( $sched_remote, 'local' ); ?>>Backup normally</option>
-                                                <option value="remote" <?php selected( $sched_remote, 'remote' ); ?>>Backup + send to remote storage</option>
-                                            </select>
-                                            <p class="description">Scheduled jobs always create the local backup first. Remote delivery uses the saved remote storage settings.</p>
-                                        </td>
-                                    </tr>
-                                </table>
-
-                                <hr class="sp-divider">
-                                <h3 id="rb-retention-subtitle" class="sp-segment-title"><span class="dashicons dashicons-trash"></span> Retention</h3>
-                                <p class="sp-desc">Automatically delete oldest backups beyond these limits. Set to 0 to keep all.</p>
-                                <table id="rb-retention-table" class="form-table sp-form-table">
-                                    <tr id="rb-row-retain-db">
-                                        <th><label for="rb_retain_db">Database backups</label></th>
-                                        <td><input type="number" name="rb_retain_db" id="rb_retain_db" value="<?php echo esc_attr( $retain_db ); ?>" min="0" max="100" class="small-text"> <span class="description">most recent to keep</span></td>
-                                    </tr>
-                                    <tr id="rb-row-retain-files">
-                                        <th><label for="rb_retain_files">File backups</label></th>
-                                        <td><input type="number" name="rb_retain_files" id="rb_retain_files" value="<?php echo esc_attr( $retain_files ); ?>" min="0" max="100" class="small-text"> <span class="description">most recent to keep</span></td>
-                                    </tr>
-                                </table>
-
-                                <p id="rb-schedule-submit-row"><button type="submit" name="rb_save_schedule" value="1" class="button button-primary">Save Schedule</button></p>
-                            </form>
+                        <div id="rb-settings-modal-footer" class="sp-modal__footer">
+                            <button type="button" id="rb-settings-modal-cancel" class="button">Cancel</button>
+                            <button type="button" id="rb-settings-modal-save" class="button button-primary">Save Changes</button>
                         </div>
                     </div>
+                </div>
 
-                    <div id="rb-ssh-card" class="sp-card sp-card--ssh">
-                        <div id="rb-ssh-body" class="sp-card__body">
-                            <h2 id="rb-remote-title"><span class="dashicons dashicons-networking"></span> Remote Storage</h2>
-                            <p class="sp-desc">Configure where remote-delivery backups are sent. SSH/SCP and FTP are both supported.</p>
+                <div id="rb-content-stack" class="sp-stack">
 
-                            <div class="sp-protocol-ssh" <?php echo 'ssh' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                <?php if ( $this->ssh_tools_ready() ) : ?>
-                                    <p class="sp-transport-tools-ok description">
-                                        <span class="sp-ok">scp ✓</span> &nbsp;
-                                        <span class="sp-ok">ssh ✓</span> &nbsp;
-                                        <span class="<?php echo $this->sshpass_available() ? 'sp-ok' : 'sp-missing'; ?>">sshpass <?php echo $this->sshpass_available() ? '✓' : '✗'; ?></span>
-                                    </p>
-                                <?php else : ?>
-                                    <div class="sp-transport-tools-banner">
-                                        <span class="sp-transport-tools-icons">
-                                            <span class="<?php echo $this->command_available( 'scp' ) ? 'sp-ok' : 'sp-missing'; ?>">scp <?php echo $this->command_available( 'scp' ) ? '✓' : '✗'; ?></span>
-                                            <span class="<?php echo $this->command_available( 'ssh' ) ? 'sp-ok' : 'sp-missing'; ?>">ssh <?php echo $this->command_available( 'ssh' ) ? '✓' : '✗'; ?></span>
-                                            <span class="<?php echo $this->sshpass_available() ? 'sp-ok' : 'sp-missing'; ?>">sshpass <?php echo $this->sshpass_available() ? '✓' : '✗'; ?></span>
-                                        </span>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-
-                            <div class="sp-protocol-ftp" <?php echo 'ftp' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                <?php if ( $ftp_available ) : ?>
-                                    <p class="sp-transport-tools-ok description">
-                                        <span class="sp-ok">PHP FTP extension ✓</span>
-                                    </p>
-                                <?php else : ?>
-                                    <div class="sp-transport-tools-banner">
-                                        <span class="sp-transport-tools-icons">
-                                            <span class="sp-missing">PHP FTP extension ✗</span>
-                                        </span>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-
-                            <form id="rb-remote-form" method="post">
-                                <?php wp_nonce_field( 'rb_remote' ); ?>
-                                <table id="rb-remote-table" class="form-table sp-form-table">
-                                    <tr id="rb-row-protocol">
-                                        <th><label for="rb_remote_protocol">Protocol</label></th>
-                                        <td>
-                                            <select name="rb_remote_protocol" id="rb_remote_protocol">
-                                                <option value="ssh" <?php selected( $remote_protocol, 'ssh' ); ?>>SSH / SCP</option>
-                                                <option value="ftp" <?php selected( $remote_protocol, 'ftp' ); ?>>FTP</option>
-                                            </select>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb-row-ssh-host" class="sp-protocol-ssh" <?php echo 'ssh' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ssh_host">Host</label></th>
-                                        <td><input type="text" name="rb_ssh_host" id="rb_ssh_host" class="regular-text" value="<?php echo esc_attr( $ssh_host ); ?>" placeholder="backup.example.com"></td>
-                                    </tr>
-                                    <tr id="rb-row-ssh-port" class="sp-protocol-ssh" <?php echo 'ssh' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ssh_port">Port</label></th>
-                                        <td><input type="number" name="rb_ssh_port" id="rb_ssh_port" class="small-text" value="<?php echo esc_attr( $ssh_port ); ?>" min="1" max="65535"></td>
-                                    </tr>
-                                    <tr id="rb-row-ssh-username" class="sp-protocol-ssh" <?php echo 'ssh' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ssh_username">Username</label></th>
-                                        <td><input type="text" name="rb_ssh_username" id="rb_ssh_username" class="regular-text" value="<?php echo esc_attr( $ssh_username ); ?>" placeholder="backups"></td>
-                                    </tr>
-                                    <tr id="rb-row-ssh-path" class="sp-protocol-ssh" <?php echo 'ssh' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ssh_path">Remote Path</label></th>
-                                        <td><input type="text" name="rb_ssh_path" id="rb_ssh_path" class="regular-text" value="<?php echo esc_attr( $ssh_path ); ?>" placeholder="/home/backups/example-site"></td>
-                                    </tr>
-                                    <tr id="rb-row-ssh-auth" class="sp-protocol-ssh" <?php echo 'ssh' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ssh_auth_method">Auth Method</label></th>
-                                        <td>
-                                            <select name="rb_ssh_auth_method" id="rb_ssh_auth_method">
-                                                <option value="key" <?php selected( $ssh_auth, 'key' ); ?>>SSH Private Key</option>
-                                                <option value="password" <?php selected( $ssh_auth, 'password' ); ?>>Password</option>
-                                            </select>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb-row-ssh-key" class="sp-protocol-ssh sp-auth-key" <?php echo 'ssh' !== $remote_protocol || 'key' !== $ssh_auth ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ssh_key">Private Key</label></th>
-                                        <td>
-                                            <textarea name="rb_ssh_key" id="rb_ssh_key" rows="5" class="large-text code" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;…&#10;-----END OPENSSH PRIVATE KEY-----"><?php echo esc_textarea( $ssh_key ); ?></textarea>
-                                            <p class="description">Paste the full unencrypted private key including header/footer lines. Public keys and passphrase-protected keys are not supported.</p>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb-row-ssh-password" class="sp-protocol-ssh sp-auth-password" <?php echo 'ssh' !== $remote_protocol || 'password' !== $ssh_auth ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ssh_password">Password</label></th>
-                                        <td>
-                                            <input type="password" name="rb_ssh_password" id="rb_ssh_password" class="regular-text" value="<?php echo esc_attr( $ssh_password ); ?>" autocomplete="off">
-                                            <p class="description">Requires <code>sshpass</code> installed on the server.</p>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb-row-ftp-host" class="sp-protocol-ftp" <?php echo 'ftp' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ftp_host">Host</label></th>
-                                        <td><input type="text" name="rb_ftp_host" id="rb_ftp_host" class="regular-text" value="<?php echo esc_attr( $ftp_host ); ?>" placeholder="ftp.example.com"></td>
-                                    </tr>
-                                    <tr id="rb-row-ftp-port" class="sp-protocol-ftp" <?php echo 'ftp' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ftp_port">Port</label></th>
-                                        <td><input type="number" name="rb_ftp_port" id="rb_ftp_port" class="small-text" value="<?php echo esc_attr( $ftp_port ); ?>" min="1" max="65535"></td>
-                                    </tr>
-                                    <tr id="rb-row-ftp-username" class="sp-protocol-ftp" <?php echo 'ftp' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ftp_username">Username</label></th>
-                                        <td><input type="text" name="rb_ftp_username" id="rb_ftp_username" class="regular-text" value="<?php echo esc_attr( $ftp_username ); ?>" placeholder="backups"></td>
-                                    </tr>
-                                    <tr id="rb-row-ftp-password" class="sp-protocol-ftp" <?php echo 'ftp' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ftp_password">Password</label></th>
-                                        <td><input type="password" name="rb_ftp_password" id="rb_ftp_password" class="regular-text" value="<?php echo esc_attr( $ftp_password ); ?>" autocomplete="off"></td>
-                                    </tr>
-                                    <tr id="rb-row-ftp-path" class="sp-protocol-ftp" <?php echo 'ftp' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                        <th><label for="rb_ftp_path">Remote Path</label></th>
-                                        <td>
-                                            <input type="text" name="rb_ftp_path" id="rb_ftp_path" class="regular-text" value="<?php echo esc_attr( $ftp_path ); ?>" placeholder="/backups or /home/backups/example-site">
-                                            <p class="description">Use a path the FTP user can access. Some FTP servers expect a path relative to the FTP root.</p>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb-row-ftp-passive" class="sp-protocol-ftp" <?php echo 'ftp' !== $remote_protocol ? 'style="display:none;"' : ''; ?>>
-                                        <th>Transfer Mode</th>
-                                        <td>
-                                            <label class="sp-checkbox-row" for="rb_ftp_passive">
-                                                <input type="checkbox" name="rb_ftp_passive" id="rb_ftp_passive" value="1" <?php checked( $ftp_passive ); ?>>
-                                                Use passive mode
-                                            </label>
-                                        </td>
-                                    </tr>
-                                </table>
-                                <p id="rb-remote-submit-row" class="sp-schedule-actions">
-                                    <button type="submit" name="rb_save_connection" value="1" class="button button-primary">Save Remote Storage</button>
-                                    <button type="submit" name="rb_test_remote" value="1" class="button">Test Connection</button>
-                                </p>
-                            </form>
-
-                            <hr class="sp-divider">
-                            <h3 id="rb-pull-subtitle" class="sp-segment-title"><span class="dashicons dashicons-admin-links"></span> Pull Access</h3>
-                            <p class="sp-desc">Use this when a central SavedPixel Remote Backup monitor should pull completed backups from this site instead of receiving them over SSH/SCP or FTP.</p>
-                            <form id="rb-pull-form" method="post">
-                                <?php wp_nonce_field( 'rb_pull_access' ); ?>
-                                <table id="rb-pull-table" class="form-table sp-form-table">
-                                    <tr id="rb-row-pull-token">
-                                        <th><label for="rb_pull_token">Pull Token</label></th>
-                                        <td>
-                                            <input type="text" name="rb_pull_token" id="rb_pull_token" class="regular-text code" value="<?php echo esc_attr( $pull_token ); ?>" autocomplete="off">
-                                            <p class="description">The monitor plugin sends this token as <code>X-RB-Pull-Token</code> when it reads the catalog and downloads backup artifacts.</p>
-                                        </td>
-                                    </tr>
-                                    <tr id="rb-row-status-endpoint">
-                                        <th>Status Endpoint</th>
-                                        <td><code><?php echo esc_html( $status_url ); ?></code></td>
-                                    </tr>
-                                    <tr id="rb-row-catalog-endpoint">
-                                        <th>Catalog Endpoint</th>
-                                        <td><code><?php echo esc_html( $catalog_url ); ?></code></td>
-                                    </tr>
-                                </table>
-                                <p id="rb-pull-submit-row" class="sp-schedule-actions">
-                                    <button type="submit" name="rb_save_pull_access" value="1" class="button button-primary">Save Pull Access</button>
-                                    <button type="submit" name="rb_regenerate_pull_token" value="1" class="button" onclick="return confirm('Regenerate the pull token? Existing monitors will stop working until updated.');">Regenerate Token</button>
-                                </p>
-                            </form>
-                        </div>
-                    </div>
+                <div id="sp-progress-overlay" class="sp-progress-overlay" style="display:none;">
+                    <span id="sp-progress-icon" class="dashicons dashicons-update sp-spin"></span>
+                    <span id="sp-progress-text">Starting backup…</span>
                 </div>
 
                 <section id="rb-history-section">
@@ -2295,7 +2714,8 @@ class Remote_Backup_Admin {
                                             <th>Remote</th>
                                             <th>Total Size</th>
                                             <th>DB Size</th>
-                                            <th class="sp-th-actions">Actions</th>
+                                            <th></th>
+                                            <th></th>
                                         </tr>
                                     </thead>
                                     <tbody id="rb-history-body">
@@ -2335,19 +2755,13 @@ class Remote_Backup_Admin {
                                                 </td>
                                                 <td><?php echo esc_html( size_format( $b['total_size'] ) ); ?></td>
                                                 <td><?php echo $b['db_size'] ? esc_html( size_format( $b['db_size'] ) ) : '—'; ?></td>
-                                                <td class="sp-td-actions">
-                                                    <div class="sp-actions">
-                                                        <?php if ( ! empty( $b['db_file'] ) ) : ?>
-                                                            <a href="<?php echo esc_url( $this->downloads->download_url( $b['id'], 'database' ) ); ?>" class="sp-btn sp-btn--ghost sp-btn--icon" title="Download DB"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3C7.58 3 4 4.34 4 6v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6c0-1.66-3.58-3-8-3Zm0 2c3.87 0 6 1.13 6 1s-2.13 1-6 1-6-1.13-6-1 2.13-1 6-1ZM6 8.27C7.53 9 9.58 9.5 12 9.5s4.47-.5 6-1.23V12c0 .13-2.13 1-6 1s-6-.87-6-1V8.27ZM6 14.27C7.53 15 9.58 15.5 12 15.5s4.47-.5 6-1.23V18c0 .13-2.13 1-6 1s-6-.87-6-1v-3.73Z" fill="currentColor"/></svg></a>
-                                                        <?php endif; ?>
-                                                        <?php if ( ! empty( $b['files_file'] ) ) : ?>
-                                                            <a href="<?php echo esc_url( $this->downloads->download_url( $b['id'], 'files' ) ); ?>" class="sp-btn sp-btn--ghost sp-btn--icon" title="Download Files"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2Z" fill="currentColor"/></svg></a>
-                                                        <?php endif; ?>
-                                                        <?php if ( ! empty( $b['plugins_file'] ) ) : ?>
-                                                            <a href="<?php echo esc_url( $this->downloads->download_url( $b['id'], 'plugins' ) ); ?>" class="sp-btn sp-btn--ghost sp-btn--icon" title="Download Plugins"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.5 11H19V7c0-1.1-.9-2-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4c-1.1 0-2 .9-2 2v3.8h1.5a2.7 2.7 0 0 1 0 5.4H2V20c0 1.1.9 2 2 2h3.8v-1.5a2.7 2.7 0 0 1 5.4 0V22H17c1.1 0 2-.9 2-2v-4h1.5a2.5 2.5 0 0 0 0-5Z" fill="currentColor"/></svg></a>
-                                                        <?php endif; ?>
-                                                        <a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin.php?page=' . $this->backup_page_slug() . '&rb_delete=' . urlencode( $b['id'] ) ), 'rb_delete' ) ); ?>" class="sp-btn sp-btn--danger sp-btn--icon" title="Delete" onclick="return confirm('Delete this backup and its files?');"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 6h2v8h-2V9Zm4 0h2v8h-2V9ZM7 9h2v8H7V9Zm-1 12V8h12v13H6Z" fill="currentColor"></path></svg></a>
-                                                    </div>
+                                                <td>
+                                                    <?php if ( ! empty( $b['db_file'] ) || ! empty( $b['files_file'] ) || ! empty( $b['plugins_file'] ) ) : ?>
+                                                        <a id="rb-download-<?php echo esc_attr( $b['id'] ); ?>" href="<?php echo esc_url( $this->downloads->download_url( $b['id'], ! empty( $b['db_file'] ) ? 'database' : ( ! empty( $b['files_file'] ) ? 'files' : 'plugins' ) ) ); ?>" class="sp-link">Download</a>
+                                                    <?php endif; ?>
+                                                </td>
+                                                <td>
+                                                    <a id="rb-delete-<?php echo esc_attr( $b['id'] ); ?>" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin.php?page=' . $this->backup_page_slug() . '&rb_delete=' . urlencode( $b['id'] ) ), 'rb_delete' ) ); ?>" class="sp-link sp-link--danger" onclick="return confirm('Delete this backup and its files?');">Delete</a>
                                                 </td>
                                             </tr>
                                         <?php endforeach; ?>
@@ -2359,21 +2773,31 @@ class Remote_Backup_Admin {
                     </div>
                 </section>
 
-                <div id="rb-log-card" class="sp-card sp-card--log">
-                    <div id="rb-log-body" class="sp-card__body">
-                        <h2 id="rb-log-title"><span class="dashicons dashicons-editor-code"></span> Debug Log</h2>
-                        <?php $log = $this->logger->get_log(); ?>
-                        <?php if ( $log ) : ?>
-                            <pre id="rb-log-output" class="sp-log"><?php echo esc_html( $log ); ?></pre>
-                            <form id="rb-log-clear-form" method="post" class="sp-log-actions">
-                                <?php wp_nonce_field( 'rb_log' ); ?>
-                                <input type="hidden" name="rb_clear_log" value="1">
-                                <button id="rb-log-clear-btn" type="submit" class="button button-small" onclick="return confirm('Clear the entire log?');">Clear Log</button>
-                            </form>
-                        <?php else : ?>
-                            <p class="sp-empty">No log entries yet.</p>
-                        <?php endif; ?>
+                <section id="rb-log-section">
+                    <div id="rb-log-header" class="sp-card__header">
+                        <div id="rb-log-header-main">
+                            <h2 id="rb-log-title" class="sp-card__title">Debug Log</h2>
+                        </div>
                     </div>
+                    <div id="rb-log-card" class="sp-card sp-card--log">
+                        <div id="rb-log-body" class="sp-card__body sp-card__body--flush">
+                            <?php $log = $this->logger->get_log(); ?>
+                            <?php if ( $log ) : ?>
+                                <pre id="rb-log-output" class="sp-log"><?php echo esc_html( $log ); ?></pre>
+                            <?php else : ?>
+                                <p id="rb-log-empty" class="sp-empty">No log entries yet.</p>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <?php if ( $log ) : ?>
+                        <form id="rb-log-clear-form" method="post" class="sp-log-actions">
+                            <?php wp_nonce_field( 'rb_log' ); ?>
+                            <input type="hidden" name="rb_clear_log" value="1">
+                            <button id="rb-log-clear-btn" type="submit" class="button button-small" onclick="return confirm('Clear the entire log?');">Clear Log</button>
+                        </form>
+                    <?php endif; ?>
+                </section>
+
                 </div>
         <?php
         savedpixel_admin_page_end();
@@ -2434,7 +2858,7 @@ class Remote_Backup_Admin {
                             <h2>Monitor Settings</h2>
                             <form method="post">
                                 <?php wp_nonce_field( 'rb_monitor' ); ?>
-                                <table class="form-table sp-form-table">
+                                <table class="form-table sp-form-table sp-u-mt-6">
                                     <tr>
                                         <th><label for="rb_monitor_retry_minutes">Poll Delay</label></th>
                                         <td>
@@ -2463,7 +2887,7 @@ class Remote_Backup_Admin {
                             <hr class="sp-divider">
                             <div class="sp-monitor-inline-actions">
                                 <div>
-                                    <h3 class="sp-segment-title">Actions</h3>
+                                    <h3 class="sp-segment-title sp-u-mt-0">Actions</h3>
                                     <p class="sp-desc">The monitor cron runs every five minutes, but each site is only checked when its synced database or files schedule says it is due. Polling refreshes status and schedules only. Use <code>Pull DB</code> or <code>Pull Files</code> to download artifacts.</p>
                                 </div>
                                 <form method="post">
@@ -2479,7 +2903,7 @@ class Remote_Backup_Admin {
                             <h2>Add Site</h2>
                             <form method="post">
                                 <?php wp_nonce_field( 'rb_monitor' ); ?>
-                                <table class="form-table sp-form-table">
+                                <table class="form-table sp-form-table sp-u-mt-6">
                                     <tr>
                                         <th><label for="rb_site_url">Site URL</label></th>
                                         <td><input type="url" name="rb_site_url" id="rb_site_url" class="regular-text" placeholder="https://example.com" required></td>

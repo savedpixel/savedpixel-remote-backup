@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.3.0 - 2026-03-27
+
+- Added dismissible in-progress backup modal support with inline progress continuation.
+- Changed inline backup progress to stay hidden until the modal is dismissed.
+- Changed dismissed inline progress layout to use a full-width bar with a single-line size summary.
+- Fixed progress spinner animation so modal and inline states visibly spin during active work.
+- Fixed dismiss button availability so it appears immediately when the backup modal opens.
+
+## 1.2.0 - 2026-03-25
+
+- Added remote storage provider architecture with pluggable provider interface.
+- Added Google Drive provider with OAuth 2.0 authorization and resumable uploads.
+- Added OneDrive provider with Microsoft Graph API, OAuth 2.0, and upload sessions.
+- Added Dropbox provider with OAuth 2.0 auth code flow and upload sessions for large files.
+- Added Backup Now popup modal with scope selection and conditional remote storage checkbox.
+- Added AJAX lazy-loading infinite-depth folder tree with checkbox cascading and indeterminate parent state.
+- Changed scheduled delivery from shared option to per-scope settings for database and files independently.
+- Fixed scheduled delivery dropdown allowing remote selection when no provider is configured.
+
 ## 1.1.0 - 2026-03-22
 
 - Added pull-token-authenticated REST endpoint for remote backup triggering.

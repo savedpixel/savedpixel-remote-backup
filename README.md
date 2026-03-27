@@ -19,22 +19,26 @@ SavedPixel Remote Backup is a WordPress backup workspace for database dumps, fil
 
 - Backup scopes for `database`, `files`, and `both`.
 - Manual backups from wp-admin with asynchronous job handling and progress feedback.
+- Dismissible backup progress modal that hands off to a full-width inline progress row.
 - Scheduled database and file backups with separate frequency, time, and weekday controls.
+- Per-scope scheduled delivery mode for database and files independently.
 - Retention controls for how many database and file backups to keep.
 - Local artifact storage for compressed database dumps and ZIP archives.
 - Separate plugin-archive handling alongside full file backups.
 - Download actions for database, files, and plugin artifacts.
 - Delete actions for stored backups.
-- Remote delivery support with local-only vs remote-delivery modes.
-- Remote transport configuration for SSH or FTP, including connection testing and remote-path setup.
+- Remote storage provider architecture with pluggable provider interface.
+- Google Drive, OneDrive, and Dropbox cloud storage providers with OAuth 2.0.
+- AJAX lazy-loading folder tree with checkbox cascading for granular file selection.
 - Pull-token API for remote catalog access and artifact downloads by a monitor site.
 - Pull-token-authenticated REST endpoint for remote backup triggering by a paired monitor site.
 - Trigger metadata response for monitor-side run tracking.
 - In-dashboard transfer/progress state for long-running backups.
+- Summary cards showing backup counts, remote status, and storage usage at a glance.
 
 ## Admin Page
 
-The admin workspace is organized around manual backup actions, schedule and retention settings, remote transport settings, pull-token access, and backup history. The history table exposes direct download buttons for stored artifacts and delete actions for old backups. Long-running manual runs use background jobs and an overlay progress UI instead of blocking the page.
+The admin page uses a monitor-style layout with summary cards at the top and modal-based settings. Header action buttons provide quick access to Backup Now, File Selection, DB Schedule, Files Schedule, Remote Storage, Pull Access, and Save Settings. Each settings area opens as a popup modal. Active backups open a progress modal that can be dismissed into a full-width inline progress row above the history table, while the backup history table and debug log remain as inline sections below the summary cards.
 
 ## Requirements
 

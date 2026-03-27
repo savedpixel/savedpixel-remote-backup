@@ -17,7 +17,12 @@
     /* ── AJAX backup with progress polling ────────────── */
     var statusPollTimer = null;
     var statusPollFailures = 0;
+    var statusPollCount = 0;
+    var lastSeenPhase = '';
     var activeJobId = rbAdmin.activeJobId || '';
+    var lastBackupSizes = { db: 0, files: 0, total: 0 };
+    var lastProgressSnapshot = null;
+    var inlineProgressVisible = false;
 
     function backupPageUrl() {
         return rbAdmin.backupPageUrl || window.location.href;
@@ -31,11 +36,105 @@
         return Array.prototype.slice.call((root || document).querySelectorAll(selector));
     }
 
+    function formatBytes(bytes) {
+        if (!bytes || bytes <= 0) return '0 B';
+        var units = ['B', 'KB', 'MB', 'GB'];
+        var i = 0;
+        var val = bytes;
+        while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
+        return (i === 0 ? val : val.toFixed(1)) + ' ' + units[i];
+    }
+
     function updateProgressText(phase) {
         var text = queryOne('#sp-progress-text, #rb-progress-text');
         if (text) text.textContent = phaseLabels[phase] || phase || 'Processing backup…';
         var modalText = document.getElementById('rb-modal-phase');
         if (modalText) modalText.textContent = phaseLabels[phase] || phase || 'Processing backup…';
+    }
+
+    function shouldShowInlineProgress() {
+        var popupOpen = popupOverlay && popupOverlay.style.display !== 'none';
+        return inlineProgressVisible && !backupModal && !popupOpen;
+    }
+
+    function updateInlineProgress(data) {
+        var overlay = queryOne('#sp-progress-overlay, #rb-progress-overlay');
+        if (!overlay) return;
+
+        if (!shouldShowInlineProgress()) {
+            overlay.style.display = 'none';
+            return;
+        }
+
+        var expectedSize = data.expectedSize || 0;
+        var totalSize = data.progressSize || 0;
+        var pctValue = 0;
+
+        if (expectedSize > 0 && totalSize > 0) {
+            pctValue = Math.min(Math.round((totalSize / expectedSize) * 100), 100);
+        }
+
+        overlay.style.display = '';
+        overlay.innerHTML = ''
+            + '<div id="sp-progress-inline-shell" class="sp-progress-inline-shell">'
+            + '<div class="sp-progress-inline-header">'
+            + '<div class="sp-progress-inline-title">'
+            + '<span id="sp-progress-icon" class="dashicons dashicons-update sp-spin sp-progress-inline-icon"></span>'
+            + '<span id="sp-progress-text" class="sp-progress-inline-phase">' + escHtml(phaseLabels[data.phase] || data.phase || 'Processing backup…') + '</span>'
+            + '</div>'
+            + '<div id="sp-progress-inline-pct" class="sp-progress-inline-pct">' + pctValue + '%</div>'
+            + '</div>'
+            + '<div id="sp-progress-inline-bar" class="sp-progress-inline-bar">'
+            + '<div id="sp-progress-inline-bar-fill" class="sp-progress-inline-bar-fill" style="width:' + pctValue + '%;"></div>'
+            + '</div>'
+            + '<div id="sp-progress-inline-sizes" class="sp-progress-inline-sizes">'
+            + '<span class="sp-progress-inline-stat"><span class="sp-progress-inline-stat-label">Database</span><span id="sp-progress-inline-db" class="sp-progress-inline-stat-value">' + (data.dbSize > 0 ? formatBytes(data.dbSize) : '—') + '</span></span>'
+            + '<span class="sp-progress-inline-stat"><span class="sp-progress-inline-stat-label">Files</span><span id="sp-progress-inline-files" class="sp-progress-inline-stat-value">' + (data.filesSize > 0 ? formatBytes(data.filesSize) : '—') + '</span></span>'
+            + '<span class="sp-progress-inline-stat sp-progress-inline-stat--total"><span class="sp-progress-inline-stat-label">Total</span><span id="sp-progress-inline-total" class="sp-progress-inline-stat-value">' + (totalSize > 0 ? formatBytes(totalSize) : '—') + '</span></span>'
+            + '</div>'
+            + '</div>';
+    }
+
+    function updateModalProgress(data) {
+        var dbRow = document.getElementById('rb-modal-db-size');
+        var filesRow = document.getElementById('rb-modal-files-size');
+        var totalRow = document.getElementById('rb-modal-total-size');
+        var barFill = document.getElementById('rb-modal-bar-fill');
+
+        var dbSize = data.dbSize || 0;
+        var filesSize = data.filesSize || 0;
+        var totalSize = data.progressSize || 0;
+
+        lastBackupSizes = { db: dbSize, files: filesSize, total: totalSize };
+        lastProgressSnapshot = {
+            phase: data.phase,
+            dbSize: dbSize,
+            filesSize: filesSize,
+            progressSize: totalSize,
+            expectedSize: data.expectedSize || 0
+        };
+
+        if (dbRow) dbRow.textContent = dbSize > 0 ? formatBytes(dbSize) : '—';
+        if (filesRow) filesRow.textContent = filesSize > 0 ? formatBytes(filesSize) : '—';
+        if (totalRow) totalRow.textContent = totalSize > 0 ? formatBytes(totalSize) : '—';
+
+        // Compute percentage from actual sizes when expected total is available.
+        var expectedSize = data.expectedSize || 0;
+        var pctValue = 0;
+        if (expectedSize > 0 && totalSize > 0) {
+            pctValue = Math.min(Math.round((totalSize / expectedSize) * 100), 100);
+        } else {
+            var phasePercent = {
+                queued: 0, starting: 2, database: 10, files: 50, plugins: 80, remote: 92, complete: 100, failed: 100
+            };
+            pctValue = phasePercent[data.phase] || 0;
+        }
+
+        var pctEl = document.getElementById('rb-modal-pct');
+        if (pctEl) pctEl.textContent = pctValue + '%';
+        if (barFill) barFill.style.width = pctValue + '%';
+
+        updateInlineProgress(lastProgressSnapshot);
     }
 
     /* ── Backup modal overlay (full-screen) ──────────── */
@@ -60,9 +159,29 @@
             + '<style>@keyframes rb-spin{to{transform:rotate(360deg)}}</style>'
             + '</div>'
             + '<h3 id="rb-modal-title" style="margin:0 0 6px;">Backup in Progress</h3>'
-            + '<p id="rb-modal-phase" style="margin:0;color:#50575e;font-size:13px;">Starting backup…</p>';
+            + '<p id="rb-modal-phase" style="margin:0 0 6px;color:#50575e;font-size:13px;">Starting backup…</p>'
+            + '<p id="rb-modal-pct" style="margin:0 0 8px;font-size:24px;font-weight:600;color:#1d2327;font-variant-numeric:tabular-nums;">0%</p>'
+            + '<div id="rb-modal-bar" style="background:#e2e4e7;border-radius:3px;height:6px;margin:0 0 14px;overflow:hidden;">'
+            + '<div id="rb-modal-bar-fill" style="background:#2271b1;height:100%;width:0%;transition:width .4s ease;"></div>'
+            + '</div>'
+            + '<table id="rb-modal-sizes" style="width:100%;font-size:12px;color:#50575e;border-collapse:collapse;">'
+            + '<tr><td style="text-align:left;padding:3px 0;">Database</td><td id="rb-modal-db-size" style="text-align:right;padding:3px 0;font-variant-numeric:tabular-nums;">—</td></tr>'
+            + '<tr><td style="text-align:left;padding:3px 0;">Files</td><td id="rb-modal-files-size" style="text-align:right;padding:3px 0;font-variant-numeric:tabular-nums;">—</td></tr>'
+            + '<tr style="border-top:1px solid #e2e4e7;"><td style="text-align:left;padding:6px 0 0;font-weight:600;">Total</td><td id="rb-modal-total-size" style="text-align:right;padding:6px 0 0;font-weight:600;font-variant-numeric:tabular-nums;">—</td></tr>'
+            + '</table>';
 
         document.body.appendChild(backupModal);
+
+        var dismissBtn = document.createElement('button');
+        dismissBtn.id = 'rb-modal-dismiss';
+        dismissBtn.type = 'button';
+        dismissBtn.className = 'button';
+        dismissBtn.style.cssText = 'margin-top:14px;';
+        dismissBtn.textContent = 'Dismiss';
+        dismissBtn.addEventListener('click', function () {
+            dismissBackupModalToInline();
+        });
+        backupModal.appendChild(dismissBtn);
     }
 
     function showBackupModalResult(msg, type) {
@@ -80,9 +199,19 @@
             titleText = type === 'error' ? 'Backup Failed' : 'Backup Finished';
         }
 
+        var sizeSummary = '';
+        if (type === 'success' && lastBackupSizes.total > 0) {
+            sizeSummary = '<table id="rb-modal-result-sizes" style="width:100%;font-size:12px;color:#50575e;border-collapse:collapse;margin:0 0 14px;">'
+                + '<tr><td style="text-align:left;padding:3px 0;">Database</td><td style="text-align:right;padding:3px 0;font-variant-numeric:tabular-nums;">' + formatBytes(lastBackupSizes.db) + '</td></tr>'
+                + '<tr><td style="text-align:left;padding:3px 0;">Files</td><td style="text-align:right;padding:3px 0;font-variant-numeric:tabular-nums;">' + formatBytes(lastBackupSizes.files) + '</td></tr>'
+                + '<tr style="border-top:1px solid #e2e4e7;"><td style="text-align:left;padding:6px 0 0;font-weight:600;">Total</td><td style="text-align:right;padding:6px 0 0;font-weight:600;font-variant-numeric:tabular-nums;">' + formatBytes(lastBackupSizes.total) + '</td></tr>'
+                + '</table>';
+        }
+
         backupModal.innerHTML = '<div id="rb-modal-result-icon" style="margin-bottom:12px;">' + iconSvg + '</div>'
             + '<h3 id="rb-modal-result-title" style="margin:0 0 8px;">' + titleText + '</h3>'
-            + '<p id="rb-modal-result-message" style="margin:0 0 16px;color:#50575e;font-size:13px;">' + escHtml(msg) + '</p>'
+            + '<p id="rb-modal-result-message" style="margin:0 0 ' + (sizeSummary ? '10' : '16') + 'px;color:#50575e;font-size:13px;">' + escHtml(msg) + '</p>'
+            + sizeSummary
             + '<div id="rb-modal-result-actions" style="display:flex;gap:8px;justify-content:center;">'
             + '<button id="rb-modal-close" type="button" class="button button-primary" style="min-width:90px;">Close</button>'
             + '</div>';
@@ -95,6 +224,14 @@
     function removeBackupModal() {
         if (backupModal) { backupModal.remove(); backupModal = null; }
         if (backupModalOverlay) { backupModalOverlay.remove(); backupModalOverlay = null; }
+    }
+
+    function dismissBackupModalToInline() {
+        inlineProgressVisible = true;
+        removeBackupModal();
+        if (lastProgressSnapshot) {
+            updateInlineProgress(lastProgressSnapshot);
+        }
     }
 
     function ajaxErrorMessage(data) {
@@ -139,32 +276,50 @@
             .then(parseAjaxResponse);
     }
 
-    /** Collect smart folder paths (parent if all children selected, else individual child paths). */
+    /**
+     * Collect selected folder paths for backup.
+     * If a parent is checked and ALL its loaded children are checked, emit only the parent path.
+     * Otherwise emit individual checked leaf/child paths.
+     */
     function collectFolders() {
         var result = [];
-        queryAll('.sp-folder-cb:checked, .rb-folder-cb:checked').forEach(function (cb) {
-            if (cb.getAttribute('data-children') === '1') {
-                var node = cb.closest('.sp-tree-node, .rb-tree-node');
-                var allKids = node.querySelectorAll('.sp-child-cb, .rb-child-cb');
-                var checkedKids = node.querySelectorAll('.sp-child-cb:checked, .rb-child-cb:checked');
-                if (allKids.length === 0 || allKids.length === checkedKids.length) {
-                    result.push(cb.value);
-                }
-            } else if (!cb.classList.contains('sp-child-cb') && !cb.classList.contains('rb-child-cb')) {
-                result.push(cb.value);
+        var tree = document.getElementById('sp-folder-tree');
+        if (!tree) return result;
+
+        function collectNode(node) {
+            var cb = node.querySelector(':scope > .sp-tree-row .sp-folder-cb');
+            if (!cb) return;
+            if (!cb.checked && !cb.indeterminate) return;
+
+            var childContainer = node.querySelector(':scope > .sp-tree-children');
+            var childNodes = childContainer ? childContainer.querySelectorAll(':scope > .sp-tree-node') : [];
+
+            // Leaf node or no children loaded — emit directly if checked.
+            if (!childContainer || childNodes.length === 0) {
+                if (cb.checked) result.push(cb.value);
+                return;
             }
-        });
-        queryAll('.sp-child-cb:checked, .rb-child-cb:checked').forEach(function (cb) {
-            var parentVal = cb.getAttribute('data-parent');
-            var parentCb = queryOne('.sp-folder-cb[value="' + parentVal + '"], .rb-folder-cb[value="' + parentVal + '"]');
-            if (!parentCb) return;
-            var node = parentCb.closest('.sp-tree-node, .rb-tree-node');
-            var allKids = node.querySelectorAll('.sp-child-cb, .rb-child-cb');
-            var checkedKids = node.querySelectorAll('.sp-child-cb:checked, .rb-child-cb:checked');
-            if (allKids.length !== checkedKids.length) {
+
+            // Has children: check if all are checked.
+            var allChecked = true;
+            var childCbs = childContainer.querySelectorAll(':scope > .sp-tree-node > .sp-tree-row .sp-folder-cb');
+            childCbs.forEach(function (ccb) {
+                if (!ccb.checked) allChecked = false;
+            });
+
+            if (allChecked && childCbs.length > 0) {
+                // All children checked — just emit parent.
                 result.push(cb.value);
+            } else {
+                // Recurse into children for partial selection.
+                childNodes.forEach(function (cn) { collectNode(cn); });
             }
+        }
+
+        tree.querySelectorAll(':scope > .sp-tree-node').forEach(function (topNode) {
+            collectNode(topNode);
         });
+
         return result;
     }
 
@@ -224,12 +379,20 @@
         var phase = data.phase || (status === 'queued' ? 'queued' : 'starting');
 
         updateProgressText(phase);
+        updateModalProgress(data);
+
+        statusPollCount++;
+        if (phase !== lastSeenPhase) {
+            statusPollCount = 0;
+            lastSeenPhase = phase;
+        }
 
         if (status === 'queued' || status === 'running') {
             return;
         }
 
         stopStatusPolling();
+        inlineProgressVisible = false;
         setBackupUiBusy(false);
 
         var resultType = 'warning';
@@ -257,6 +420,9 @@
     function startStatusPolling(jobId) {
         activeJobId = jobId || activeJobId;
         statusPollFailures = 0;
+        statusPollCount = 0;
+        lastSeenPhase = '';
+        inlineProgressVisible = false;
         setBackupUiBusy(true);
         updateProgressText('queued');
         stopStatusPolling();
@@ -297,19 +463,127 @@
     function setBackupUiBusy(isBusy) {
         var overlay = queryOne('#sp-progress-overlay, #rb-progress-overlay');
         var actions = queryOne('#sp-manual-actions, #rb-manual-actions');
+        var backupNowBtn = document.getElementById('rb-backup-now-btn');
         queryAll('.sp-ajax-backup, .rb-ajax-backup').forEach(function (b) { b.disabled = isBusy; });
-        if (overlay) overlay.style.display = isBusy ? '' : 'none';
+        if (backupNowBtn) backupNowBtn.disabled = isBusy;
+        if (overlay) overlay.style.display = isBusy && shouldShowInlineProgress() ? '' : 'none';
         if (actions) actions.style.opacity = isBusy ? '0.5' : '';
         if (isBusy) {
             createBackupModal();
+        } else if (overlay) {
+            overlay.style.display = 'none';
         }
     }
 
-    queryAll('.sp-ajax-backup, .rb-ajax-backup').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            var scope = btn.getAttribute('data-scope');
-            var remoteMode = document.getElementById('rb_manual_remote_mode');
+    /* ── Backup Now popup ─────────────────────────────── */
+    var popupOverlay = document.getElementById('rb-backup-popup-overlay');
+    var backupNowBtn = document.getElementById('rb-backup-now-btn');
+    var popupCloseBtn = document.getElementById('rb-backup-popup-close');
+    var popupCancelBtn = document.getElementById('rb-backup-popup-cancel');
+    var popupStartBtn = document.getElementById('rb-backup-popup-start');
 
+    function openBackupPopup() {
+        if (popupOverlay) popupOverlay.style.display = '';
+    }
+
+    function closeBackupPopup() {
+        if (popupOverlay) popupOverlay.style.display = 'none';
+    }
+
+    if (backupNowBtn) {
+        backupNowBtn.addEventListener('click', openBackupPopup);
+    }
+    if (popupCloseBtn) {
+        popupCloseBtn.addEventListener('click', closeBackupPopup);
+    }
+    if (popupCancelBtn) {
+        popupCancelBtn.addEventListener('click', closeBackupPopup);
+    }
+    if (popupOverlay) {
+        popupOverlay.addEventListener('click', function (e) {
+            if (e.target === popupOverlay) closeBackupPopup();
+        });
+    }
+
+    var saveSettingsBtn = document.getElementById('rb-save-settings-btn');
+    var headerSaveForm = document.getElementById('rb-header-save-form');
+    var headerSavePayload = document.getElementById('rb-header-save-payload');
+    var scheduleFormDb = document.getElementById('rb-schedule-form-db');
+    var scheduleFormFiles = document.getElementById('rb-schedule-form-files');
+    var remoteForm = document.getElementById('rb-remote-form');
+    var pullForm = document.getElementById('rb-pull-form');
+
+    function appendHeaderSaveFields(form, prefix) {
+        if (!form || !headerSavePayload) {
+            return;
+        }
+
+        Array.prototype.forEach.call(form.elements, function (field, index) {
+            if (!field.name || field.disabled) {
+                return;
+            }
+
+            if (field.type === 'submit' || field.type === 'button' || field.type === 'file') {
+                return;
+            }
+
+            if (field.name === '_wp_http_referer' || /_nonce$/.test(field.name)) {
+                return;
+            }
+
+            if ((field.type === 'checkbox' || field.type === 'radio') && !field.checked) {
+                return;
+            }
+
+            var hidden = document.createElement('input');
+            hidden.type = 'hidden';
+            hidden.name = field.name;
+            hidden.value = field.value;
+            hidden.id = prefix + '-' + index;
+            headerSavePayload.appendChild(hidden);
+        });
+    }
+
+    if (saveSettingsBtn && headerSaveForm && headerSavePayload && scheduleFormDb && scheduleFormFiles && remoteForm && pullForm) {
+        saveSettingsBtn.addEventListener('click', function () {
+            saveSettingsBtn.disabled = true;
+            headerSavePayload.innerHTML = '';
+            appendHeaderSaveFields(scheduleFormDb, 'rb-header-save-schedule-db');
+            appendHeaderSaveFields(scheduleFormFiles, 'rb-header-save-schedule-files');
+            appendHeaderSaveFields(remoteForm, 'rb-header-save-remote');
+            appendHeaderSaveFields(pullForm, 'rb-header-save-pull');
+            headerSaveForm.requestSubmit();
+        });
+
+        var modalSaveBtn = document.getElementById('rb-settings-modal-save');
+        if (modalSaveBtn) {
+            modalSaveBtn.addEventListener('click', function () {
+                closeGenericModal(document.getElementById('rb-settings-modal'));
+                saveSettingsBtn.click();
+            });
+        }
+    }
+
+    var copyTokenBtn = document.getElementById('rb-copy-token-btn');
+    if (copyTokenBtn) {
+        copyTokenBtn.addEventListener('click', function () {
+            var codeEl = document.getElementById('rb-pull-token-display');
+            if (codeEl && navigator.clipboard) {
+                navigator.clipboard.writeText(codeEl.textContent.trim());
+                copyTokenBtn.textContent = 'Copied!';
+                setTimeout(function () { copyTokenBtn.textContent = 'Copy Token'; }, 2000);
+            }
+        });
+    }
+
+    if (popupStartBtn) {
+        popupStartBtn.addEventListener('click', function () {
+            var scopeRadio = document.querySelector('input[name="rb_backup_scope"]:checked');
+            var scope = scopeRadio ? scopeRadio.value : 'database';
+            var remoteCheckbox = document.getElementById('rb_backup_send_remote');
+            var remoteMode = (remoteCheckbox && remoteCheckbox.checked) ? 'remote' : 'local';
+
+            closeBackupPopup();
             setBackupUiBusy(true);
             updateProgressText('queued');
 
@@ -317,9 +591,8 @@
             body.append('action', 'rb_run_backup');
             body.append('_nonce', rbAdmin.nonce);
             body.append('scope', scope);
-            body.append('remote_mode', remoteMode ? remoteMode.value : 'local');
+            body.append('remote_mode', remoteMode);
 
-            // Attach selected folders when scope includes files.
             if (scope === 'files' || scope === 'both') {
                 collectFolders().forEach(function (f) { body.append('folders[]', f); });
             }
@@ -329,12 +602,21 @@
                     if (!d.success || !d.data) {
                         throw new Error(ajaxErrorMessage(d));
                     }
-
                     if (!d.data.jobId) {
                         throw new Error('The backup worker did not return a job ID.');
                     }
 
-                    showResult(d.data.message || 'Backup started. The page will update automatically.', d.data.noticeType || 'info');
+                    var status = d.data.status || 'queued';
+                    // If the server ran the backup synchronously, handle the final result directly.
+                    if (status === 'success' || status === 'failed') {
+                        setBackupUiBusy(false);
+                        var resultType = status === 'success' ? (d.data.noticeType || 'success') : 'error';
+                        showBackupModalResult(d.data.message || 'Backup finished.', resultType);
+                        showResult(d.data.message || 'Backup finished.', resultType);
+                        refreshBackupPanels().catch(function () {});
+                        return;
+                    }
+
                     startStatusPolling(d.data.jobId);
                 })
                 .catch(function (err) {
@@ -343,7 +625,6 @@
                             showResult('The first request did not return cleanly, but the backup is running in the background.', 'warning');
                             return;
                         }
-
                         stopStatusPolling();
                         setBackupUiBusy(false);
                         removeBackupModal();
@@ -352,7 +633,7 @@
                     });
                 });
         });
-    });
+    }
 
     function showResult(msg, type) {
         showNotice(msg, type);
@@ -360,27 +641,29 @@
     }
 
     function showNotice(msg, type) {
-        var wrap = queryOne('.sp-wrap, .rb-wrap');
+        var wrap = queryOne('.sp-wrap');
         if (!wrap) return;
-        var anchor = queryOne('.sp-page-header, .rb-title', wrap);
-        wrap.querySelectorAll('.rb-runtime-notice').forEach(function (el) { el.remove(); });
+        var anchor = queryOne('.sp-page-header', wrap);
+        wrap.querySelectorAll('.sp-runtime-notice').forEach(function (el) { el.remove(); });
         var div = document.createElement('div');
-        div.className = 'notice notice-' + type + ' is-dismissible rb-runtime-notice';
+        div.className = 'notice notice-' + type + ' is-dismissible sp-runtime-notice';
         div.innerHTML = '<p>' + escHtml(msg) + '</p>';
-        if (anchor && anchor.nextSibling) {
+        if (anchor && anchor.parentNode === wrap && anchor.nextSibling) {
             wrap.insertBefore(div, anchor.nextSibling);
+        } else if (anchor) {
+            anchor.insertAdjacentElement('afterend', div);
         } else {
-            wrap.appendChild(div);
+            wrap.prepend(div);
         }
         div.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     function toastStack() {
-        var stack = document.querySelector('.rb-toast-stack');
+        var stack = document.querySelector('.sp-toast-stack');
         if (stack) return stack;
 
         stack = document.createElement('div');
-        stack.className = 'rb-toast-stack';
+        stack.className = 'sp-toast-stack';
         document.body.appendChild(stack);
         return stack;
     }
@@ -391,11 +674,11 @@
         var body = document.createElement('div');
         var timeout = type === 'error' ? 9000 : 5000;
 
-        toast.className = 'rb-toast rb-toast--' + (type || 'info');
-        body.className = 'rb-toast__body';
+        toast.className = 'sp-toast sp-toast--' + (type || 'info');
+        body.className = 'sp-toast__body';
         body.textContent = msg;
 
-        close.className = 'rb-toast__close';
+        close.className = 'sp-toast__close';
         close.type = 'button';
         close.setAttribute('aria-label', 'Dismiss notification');
         close.textContent = '×';
@@ -430,11 +713,12 @@
     function toggleProtocol() {
         if (!protocolSelect) return;
         var protocol = protocolSelect.value;
-        queryAll('.sp-protocol-ssh, .rb-protocol-ssh').forEach(function (row) {
-            row.style.display = protocol === 'ssh' ? '' : 'none';
-        });
-        queryAll('.sp-protocol-ftp, .rb-protocol-ftp').forEach(function (row) {
-            row.style.display = protocol === 'ftp' ? '' : 'none';
+        var allProtocolClasses = ['.sp-protocol-ssh', '.sp-protocol-ftp', '.sp-protocol-google_drive', '.sp-protocol-onedrive', '.sp-protocol-dropbox'];
+        allProtocolClasses.forEach(function (cls) {
+            var key = cls.replace('.sp-protocol-', '');
+            queryAll(cls).forEach(function (el) {
+                el.style.display = protocol === key ? '' : 'none';
+            });
         });
     }
 
@@ -442,10 +726,10 @@
         if (!authSelect) return;
         var protocol = protocolSelect ? protocolSelect.value : 'ssh';
         var method = authSelect.value;
-        queryAll('.sp-auth-key, .rb-auth-key').forEach(function (r) {
+        queryAll('.sp-auth-key').forEach(function (r) {
             r.style.display = protocol === 'ssh' && method === 'key' ? '' : 'none';
         });
-        queryAll('.sp-auth-password, .rb-auth-password').forEach(function (r) {
+        queryAll('.sp-auth-password').forEach(function (r) {
             r.style.display = protocol === 'ssh' && method === 'password' ? '' : 'none';
         });
     }
@@ -461,10 +745,198 @@
     toggleProtocol();
     toggleAuth();
 
+    /* ── Google Drive disconnect ──────────────────────── */
+    var gdriveDisconnect = document.getElementById('rb-gdrive-disconnect');
+    if (gdriveDisconnect) {
+        gdriveDisconnect.addEventListener('click', function () {
+            if (!confirm('Disconnect Google Drive? You will need to re-authorize to use it again.')) return;
+            gdriveDisconnect.disabled = true;
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', rbAdmin.ajaxUrl, true);
+            xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+            xhr.onload = function () { location.reload(); };
+            xhr.onerror = function () { gdriveDisconnect.disabled = false; };
+            xhr.send('action=rb_gdrive_disconnect&_nonce=' + encodeURIComponent(rbAdmin.nonce));
+        });
+    }
+
+    /* ── OneDrive disconnect ─────────────────────────── */
+    var onedriveDisconnect = document.getElementById('rb-onedrive-disconnect');
+    if (onedriveDisconnect) {
+        onedriveDisconnect.addEventListener('click', function () {
+            if (!confirm('Disconnect OneDrive? You will need to re-authorize to use it again.')) return;
+            onedriveDisconnect.disabled = true;
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', rbAdmin.ajaxUrl, true);
+            xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+            xhr.onload = function () { location.reload(); };
+            xhr.onerror = function () { onedriveDisconnect.disabled = false; };
+            xhr.send('action=rb_onedrive_disconnect&_nonce=' + encodeURIComponent(rbAdmin.nonce));
+        });
+    }
+
+    /* ── Dropbox disconnect ─────────────────────────── */
+    var dropboxDisconnect = document.getElementById('rb-dropbox-disconnect');
+    if (dropboxDisconnect) {
+        dropboxDisconnect.addEventListener('click', function () {
+            if (!confirm('Disconnect Dropbox? You will need to re-authorize to use it again.')) return;
+            dropboxDisconnect.disabled = true;
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', rbAdmin.ajaxUrl, true);
+            xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+            xhr.onload = function () { location.reload(); };
+            xhr.onerror = function () { dropboxDisconnect.disabled = false; };
+            xhr.send('action=rb_dropbox_disconnect&_nonce=' + encodeURIComponent(rbAdmin.nonce));
+        });
+    }
+
+    /* ── Cloud auth modal ────────────────────────────── */
+    var authModalOverlay = document.getElementById('rb-auth-modal-overlay');
+    var authModalTitle = document.getElementById('rb-auth-modal-title');
+    var authModalLink = document.getElementById('rb-auth-modal-link');
+    var authModalCode = document.getElementById('rb-auth-modal-code');
+    var authModalStatus = document.getElementById('rb-auth-modal-status');
+    var authModalSubmit = document.getElementById('rb-auth-modal-submit');
+    var authModalCustomToggle = document.getElementById('rb-auth-modal-custom-toggle');
+    var authModalCustomFields = document.getElementById('rb-auth-modal-custom-fields');
+    var authModalClientId = document.getElementById('rb-auth-modal-client-id');
+    var authModalClientSecret = document.getElementById('rb-auth-modal-client-secret');
+    var authModalProvider = '';
+    var authModalBaseUrl = '';
+    var providerActions = { gdrive: 'rb_gdrive_manual_auth', onedrive: 'rb_onedrive_manual_auth', dropbox: 'rb_dropbox_manual_auth' };
+    var providerLabels = { gdrive: 'Google Drive', onedrive: 'OneDrive', dropbox: 'Dropbox' };
+    var providerIdFields = { gdrive: 'rb_gdrive_client_id', onedrive: 'rb_onedrive_client_id', dropbox: 'rb_dropbox_client_id' };
+    var providerSecretFields = { gdrive: 'rb_gdrive_client_secret', onedrive: 'rb_onedrive_client_secret', dropbox: 'rb_dropbox_client_secret' };
+
+    /* Custom OAuth toggle in modal */
+    if (authModalCustomToggle) {
+        authModalCustomToggle.addEventListener('click', function (e) {
+            e.preventDefault();
+            var visible = authModalCustomFields.style.display !== 'none';
+            authModalCustomFields.style.display = visible ? 'none' : '';
+        });
+    }
+
+    /* Update auth URL when custom client ID changes */
+    if (authModalClientId) {
+        authModalClientId.addEventListener('input', function () {
+            if (!authModalLink) return;
+            var customId = authModalClientId.value.trim();
+            if (customId) {
+                var url = new URL(authModalBaseUrl);
+                url.searchParams.set('client_id', customId);
+                authModalLink.href = url.toString();
+            } else {
+                authModalLink.href = authModalBaseUrl;
+            }
+        });
+    }
+
+    var authModalTest = document.getElementById('rb-auth-modal-test');
+
+    document.querySelectorAll('.rb-auth-open').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            authModalProvider = btn.getAttribute('data-provider');
+            authModalBaseUrl = btn.getAttribute('data-auth-url');
+            if (authModalTitle) authModalTitle.textContent = 'Authorize ' + (providerLabels[authModalProvider] || 'Cloud Storage');
+            if (authModalLink) authModalLink.href = authModalBaseUrl;
+            if (authModalCode) authModalCode.value = '';
+            if (authModalStatus) authModalStatus.textContent = '';
+            if (authModalSubmit) { authModalSubmit.disabled = false; authModalSubmit.style.display = ''; }
+            if (authModalTest) authModalTest.style.display = 'none';
+            /* Populate custom fields from hidden form inputs */
+            var idField = document.getElementById(providerIdFields[authModalProvider] || '');
+            var secretField = document.getElementById(providerSecretFields[authModalProvider] || '');
+            if (authModalClientId) authModalClientId.value = idField ? idField.value : '';
+            if (authModalClientSecret) authModalClientSecret.value = secretField ? secretField.value : '';
+            if (authModalCustomFields) authModalCustomFields.style.display = 'none';
+            if (authModalOverlay) authModalOverlay.style.display = '';
+        });
+    });
+
+    function closeAuthModal() {
+        if (authModalOverlay) authModalOverlay.style.display = 'none';
+        /* If auth succeeded, reload to reflect new connection state */
+        if (authModalSubmit && authModalSubmit.style.display === 'none') {
+            location.reload();
+        }
+    }
+    var authModalClose = document.getElementById('rb-auth-modal-close');
+    var authModalCancel = document.getElementById('rb-auth-modal-cancel');
+    if (authModalClose) authModalClose.addEventListener('click', closeAuthModal);
+    if (authModalCancel) authModalCancel.addEventListener('click', closeAuthModal);
+    if (authModalOverlay) authModalOverlay.addEventListener('click', function (e) { if (e.target === authModalOverlay) closeAuthModal(); });
+
+    if (authModalSubmit) {
+        authModalSubmit.addEventListener('click', function () {
+            var code = (authModalCode.value || '').trim();
+            if (!code) { authModalStatus.textContent = 'Please paste an authorization code.'; return; }
+            var action = providerActions[authModalProvider];
+            if (!action) { authModalStatus.textContent = 'Unknown provider.'; return; }
+            authModalSubmit.disabled = true;
+            authModalStatus.textContent = 'Exchanging code\u2026';
+            var customClientId = (authModalClientId ? authModalClientId.value : '').trim();
+            var customClientSecret = (authModalClientSecret ? authModalClientSecret.value : '').trim();
+            /* Sync custom credentials back to hidden form inputs */
+            var idField = document.getElementById(providerIdFields[authModalProvider] || '');
+            var secretField = document.getElementById(providerSecretFields[authModalProvider] || '');
+            if (idField) idField.value = customClientId;
+            if (secretField) secretField.value = customClientSecret;
+            var payload = 'action=' + encodeURIComponent(action) + '&_nonce=' + encodeURIComponent(rbAdmin.nonce) + '&code=' + encodeURIComponent(code);
+            if (customClientId) payload += '&client_id=' + encodeURIComponent(customClientId);
+            if (customClientSecret) payload += '&client_secret=' + encodeURIComponent(customClientSecret);
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', rbAdmin.ajaxUrl, true);
+            xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+            xhr.onload = function () {
+                try {
+                    var res = JSON.parse(xhr.responseText);
+                    if (res.success) {
+                        authModalStatus.textContent = res.data.message || 'Connected!';
+                        authModalStatus.style.color = '#00a32a';
+                        authModalSubmit.style.display = 'none';
+                        if (authModalTest) authModalTest.style.display = '';
+                    }
+                    else { authModalStatus.textContent = res.data || 'Authorization failed.'; authModalSubmit.disabled = false; }
+                } catch (e) { authModalStatus.textContent = 'Unexpected response.'; authModalSubmit.disabled = false; }
+            };
+            xhr.onerror = function () { authModalStatus.textContent = 'Network error.'; authModalSubmit.disabled = false; };
+            xhr.send(payload);
+        });
+    }
+
+    /* ── Test Connection (in auth modal) ─────────────── */
+    if (authModalTest) {
+        authModalTest.addEventListener('click', function () {
+            authModalTest.disabled = true;
+            authModalStatus.textContent = 'Testing connection\u2026';
+            authModalStatus.style.color = '';
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', rbAdmin.ajaxUrl, true);
+            xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+            xhr.onload = function () {
+                authModalTest.disabled = false;
+                try {
+                    var res = JSON.parse(xhr.responseText);
+                    if (res.success) {
+                        authModalStatus.textContent = res.data.message || 'Connection OK.';
+                        authModalStatus.style.color = '#00a32a';
+                    } else {
+                        authModalStatus.textContent = res.data || 'Test failed.';
+                        authModalStatus.style.color = '#d63638';
+                    }
+                } catch (e) { authModalStatus.textContent = 'Unexpected response.'; authModalStatus.style.color = '#d63638'; }
+            };
+            xhr.onerror = function () { authModalTest.disabled = false; authModalStatus.textContent = 'Network error.'; authModalStatus.style.color = '#d63638'; };
+            xhr.send('action=rb_test_connection&_nonce=' + encodeURIComponent(rbAdmin.nonce));
+        });
+    }
+
     /* ── Schedule weekday toggles ────────────────────── */
     function toggleWeeklyScheduleRow(scope) {
         var select = document.getElementById('rb_schedule_' + scope + '_frequency');
-        var row = document.getElementById('rb_schedule_' + scope + '_weekday_row');
+        var fieldId = scope === 'database' ? 'rb-db-weekday-field' : 'rb-files-weekday-field';
+        var row = document.getElementById(fieldId);
         if (!select || !row) return;
         row.style.display = select.value === 'weekly' ? '' : 'none';
     }
@@ -478,54 +950,216 @@
         toggleWeeklyScheduleRow(scope);
     });
 
-    /* ── Folder tree controls ─────────────────────────── */
+    /* ── Folder tree controls (lazy-loading) ─────────── */
 
-    // Toggle expand/collapse.
-    queryAll('.sp-tree-toggle, .rb-tree-toggle').forEach(function (toggle) {
-        toggle.addEventListener('click', function () {
-            var node = toggle.closest('.sp-tree-node, .rb-tree-node');
-            var children = node.querySelector('.sp-tree-children, .rb-tree-children');
-            if (!children) return;
-            var open = children.style.display !== 'none';
-            children.style.display = open ? 'none' : '';
-            toggle.classList.toggle('is-open', !open);
-            toggle.classList.toggle('rb-open', !open);
-        });
-    });
+    /**
+     * Create a tree node DOM element for a directory entry.
+     * @param {Object} entry  {name, path, hasChildren}
+     * @param {boolean} checked  initial checkbox state
+     * @return {HTMLElement}
+     */
+    function createTreeNode(entry, checked) {
+        var node = document.createElement('div');
+        node.setAttribute('data-path', entry.path);
 
-    // Parent checkbox → sync children.
-    queryAll('.sp-folder-cb[data-children="1"], .rb-folder-cb[data-children="1"]').forEach(function (parentCb) {
-        parentCb.addEventListener('change', function () {
-            var node = parentCb.closest('.sp-tree-node, .rb-tree-node');
-            node.querySelectorAll('.sp-child-cb, .rb-child-cb').forEach(function (child) {
-                child.checked = parentCb.checked;
-            });
-        });
-    });
-
-    // Child checkbox → update parent state.
-    queryAll('.sp-child-cb, .rb-child-cb').forEach(function (childCb) {
-        childCb.addEventListener('change', function () {
-            var parentVal = childCb.getAttribute('data-parent');
-            var parentCb = queryOne('.sp-folder-cb[value="' + parentVal + '"], .rb-folder-cb[value="' + parentVal + '"]');
-            if (!parentCb) return;
-            var node = parentCb.closest('.sp-tree-node, .rb-tree-node');
-            var all = node.querySelectorAll('.sp-child-cb, .rb-child-cb');
-            var checkedCount = node.querySelectorAll('.sp-child-cb:checked, .rb-child-cb:checked').length;
-            parentCb.checked = checkedCount > 0;
-            parentCb.indeterminate = checkedCount > 0 && checkedCount < all.length;
-        });
-    });
-
-    // Set initial indeterminate state.
-    queryAll('.sp-folder-cb[data-children="1"], .rb-folder-cb[data-children="1"]').forEach(function (parentCb) {
-        var node = parentCb.closest('.sp-tree-node, .rb-tree-node');
-        var all = node.querySelectorAll('.sp-child-cb, .rb-child-cb');
-        var checkedCount = node.querySelectorAll('.sp-child-cb:checked, .rb-child-cb:checked').length;
-        if (checkedCount > 0 && checkedCount < all.length) {
-            parentCb.indeterminate = true;
+        // File node — selectable with checkbox.
+        if (entry.isFile) {
+            node.className = 'sp-tree-node sp-tree-node--file';
+            var frow = document.createElement('div');
+            frow.className = 'sp-tree-row';
+            var spacer = document.createElement('span');
+            spacer.className = 'sp-tree-spacer';
+            frow.appendChild(spacer);
+            var fileLabel = document.createElement('label');
+            fileLabel.className = 'sp-file-item';
+            fileLabel.id = 'sp-label-' + entry.path.replace(/[\/\.]/g, '-');
+            var fcb = document.createElement('input');
+            fcb.type = 'checkbox';
+            fcb.className = 'sp-folder-cb';
+            fcb.value = entry.path;
+            fcb.checked = checked;
+            fcb.addEventListener('change', function () { updateAncestorState(node); });
+            var ficon = document.createElement('span');
+            ficon.className = 'dashicons dashicons-media-default';
+            fileLabel.appendChild(fcb);
+            fileLabel.appendChild(ficon);
+            fileLabel.appendChild(document.createTextNode(' ' + entry.name));
+            frow.appendChild(fileLabel);
+            node.appendChild(frow);
+            return node;
         }
+
+        // Directory node.
+        node.className = 'sp-tree-node' + (entry.hasChildren ? ' sp-tree-node--parent' : '');
+
+        var row = document.createElement('div');
+        row.className = 'sp-tree-row';
+
+        if (entry.hasChildren) {
+            var toggle = document.createElement('span');
+            toggle.className = 'sp-tree-toggle';
+            toggle.id = 'sp-toggle-' + entry.path.replace(/\//g, '-');
+            toggle.addEventListener('click', function () { toggleTreeNode(node); });
+            row.appendChild(toggle);
+        } else {
+            var spacer = document.createElement('span');
+            spacer.className = 'sp-tree-spacer';
+            row.appendChild(spacer);
+        }
+
+        var label = document.createElement('label');
+        label.className = 'sp-folder-item';
+        label.id = 'sp-label-' + entry.path.replace(/\//g, '-');
+
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'sp-folder-cb';
+        cb.value = entry.path;
+        cb.checked = checked;
+        cb.setAttribute('data-has-children', entry.hasChildren ? '1' : '0');
+        cb.addEventListener('change', function () { onCheckboxChange(node); });
+
+        var icon = document.createElement('span');
+        icon.className = 'dashicons dashicons-category';
+
+        label.appendChild(cb);
+        label.appendChild(icon);
+        label.appendChild(document.createTextNode(' ' + entry.name + '/'));
+
+        row.appendChild(label);
+        node.appendChild(row);
+
+        if (entry.hasChildren) {
+            var children = document.createElement('div');
+            children.className = 'sp-tree-children';
+            children.style.display = 'none';
+            node.appendChild(children);
+        }
+
+        return node;
+    }
+
+    /**
+     * Toggle expand/collapse of a tree node — lazy-loads children via AJAX on first expand.
+     */
+    function toggleTreeNode(node) {
+        var childrenContainer = node.querySelector(':scope > .sp-tree-children');
+        var toggle = node.querySelector(':scope > .sp-tree-row .sp-tree-toggle');
+        if (!childrenContainer) return;
+
+        var isOpen = childrenContainer.style.display !== 'none';
+        if (isOpen) {
+            childrenContainer.style.display = 'none';
+            if (toggle) { toggle.classList.remove('is-open'); }
+            return;
+        }
+
+        // Show children container.
+        childrenContainer.style.display = '';
+        if (toggle) { toggle.classList.add('is-open'); }
+
+        // If already loaded, don't re-fetch.
+        if (childrenContainer.getAttribute('data-loaded') === '1') return;
+
+        // Lazy load via AJAX.
+        var path = node.getAttribute('data-path');
+        var parentCb = node.querySelector(':scope > .sp-tree-row .sp-folder-cb');
+        var parentChecked = parentCb ? parentCb.checked : true;
+
+        childrenContainer.innerHTML = '<div class="sp-tree-loading" id="sp-loading-' + path.replace(/\//g, '-') + '"><span class="dashicons dashicons-update sp-spin"></span> Loading…</div>';
+
+        var body = new FormData();
+        body.append('action', 'rb_list_dir');
+        body.append('_nonce', rbAdmin.nonce);
+        body.append('path', path);
+
+        postAjax(body)
+            .then(function (d) {
+                if (!d.success || !d.data) throw new Error('Failed to load directory.');
+                childrenContainer.innerHTML = '';
+                childrenContainer.setAttribute('data-loaded', '1');
+
+                if (d.data.length === 0) {
+                    // No subdirectories — remove parent indicator.
+                    node.classList.remove('sp-tree-node--parent');
+                    if (toggle) { toggle.replaceWith(createSpacer()); }
+                    childrenContainer.remove();
+                    return;
+                }
+
+                d.data.forEach(function (entry) {
+                    var childNode = createTreeNode(entry, parentChecked);
+                    childrenContainer.appendChild(childNode);
+                });
+            })
+            .catch(function () {
+                childrenContainer.innerHTML = '<div class="sp-tree-error" id="sp-err-' + path.replace(/\//g, '-') + '">Failed to load.</div>';
+            });
+    }
+
+    function createSpacer() {
+        var s = document.createElement('span');
+        s.className = 'sp-tree-spacer';
+        return s;
+    }
+
+    /**
+     * Handle checkbox change — propagate down to loaded children, update parent state.
+     */
+    function onCheckboxChange(node) {
+        var cb = node.querySelector(':scope > .sp-tree-row .sp-folder-cb');
+        if (!cb) return;
+
+        // Propagate down to all loaded descendant checkboxes.
+        var childContainer = node.querySelector(':scope > .sp-tree-children');
+        if (childContainer) {
+            childContainer.querySelectorAll('.sp-folder-cb').forEach(function (childCb) {
+                childCb.checked = cb.checked;
+                childCb.indeterminate = false;
+            });
+        }
+
+        // Update ancestors.
+        updateAncestorState(node);
+    }
+
+    /**
+     * Walk up from a node and update parent checkbox checked/indeterminate state.
+     */
+    function updateAncestorState(node) {
+        var parentNode = node.parentElement;
+        if (!parentNode || !parentNode.classList.contains('sp-tree-children')) return;
+        var grandParent = parentNode.parentElement;
+        if (!grandParent || !grandParent.classList.contains('sp-tree-node')) return;
+
+        var parentCb = grandParent.querySelector(':scope > .sp-tree-row .sp-folder-cb');
+        if (!parentCb) return;
+
+        var kids = parentNode.querySelectorAll(':scope > .sp-tree-node > .sp-tree-row .sp-folder-cb');
+        var checkedCount = 0;
+        kids.forEach(function (k) { if (k.checked) checkedCount++; });
+
+        parentCb.checked = checkedCount > 0;
+        parentCb.indeterminate = checkedCount > 0 && checkedCount < kids.length;
+
+        updateAncestorState(grandParent);
+    }
+
+    // Bind initial toggle clicks on server-rendered top-level nodes.
+    queryAll('#sp-folder-tree > .sp-tree-node > .sp-tree-row .sp-tree-toggle').forEach(function (toggle) {
+        toggle.addEventListener('click', function () {
+            toggleTreeNode(toggle.closest('.sp-tree-node'));
+        });
     });
+
+    // Bind initial checkbox change events on server-rendered top-level nodes.
+    queryAll('#sp-folder-tree > .sp-tree-node > .sp-tree-row .sp-folder-cb').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+            onCheckboxChange(cb.closest('.sp-tree-node'));
+        });
+    });
+
+    /* ── Folder picker — always visible in modal, no collapsible ── */
 
     var allBtn  = queryOne('#sp-folders-all, #rb-folders-all');
     var noneBtn = queryOne('#sp-folders-none, #rb-folders-none');
@@ -533,14 +1167,14 @@
 
     if (allBtn) {
         allBtn.addEventListener('click', function () {
-            queryAll('.sp-folder-cb, .rb-folder-cb').forEach(function (cb) {
+            queryAll('.sp-folder-cb').forEach(function (cb) {
                 cb.checked = true; cb.indeterminate = false;
             });
         });
     }
     if (noneBtn) {
         noneBtn.addEventListener('click', function () {
-            queryAll('.sp-folder-cb, .rb-folder-cb').forEach(function (cb) {
+            queryAll('.sp-folder-cb').forEach(function (cb) {
                 cb.checked = false; cb.indeterminate = false;
             });
         });
@@ -569,6 +1203,94 @@
         });
     }
 
+    /* ── Generic modal open/close (settings modals) ──── */
+
+    function openGenericModal(modalId, tabId) {
+        var modal = document.getElementById(modalId);
+        if (modal) {
+            modal.style.display = 'flex';
+            if (tabId) activateTab(tabId);
+        }
+    }
+
+    function closeGenericModal(modal) {
+        if (modal) modal.style.display = 'none';
+    }
+
+    /* ── Tab switching inside settings modal ──────────── */
+    function activateTab(tabId) {
+        var tab = document.getElementById(tabId);
+        if (!tab) return;
+        var panelId = tab.getAttribute('data-tab');
+        if (!panelId) return;
+        var tabNav = tab.closest('.sp-modal-tabs');
+        if (!tabNav) return;
+        var modal = tabNav.closest('.sp-modal');
+        if (!modal) return;
+        queryAll('.sp-tab-button', tabNav).forEach(function (t) { t.classList.remove('active'); });
+        tab.classList.add('active');
+        queryAll('.sp-tab-content', modal).forEach(function (p) { p.classList.remove('active'); });
+        var panel = document.getElementById(panelId);
+        if (panel) panel.classList.add('active');
+    }
+
+    // Tab click handler.
+    document.addEventListener('click', function (e) {
+        var tab = e.target.closest('.sp-tab-button');
+        if (tab && tab.id) activateTab(tab.id);
+    });
+
+    queryAll('.sp-modal-overlay').forEach(function (overlay) {
+        // Skip the backup popup and auth modal — they have their own handlers.
+        if (overlay.id === 'rb-backup-popup-overlay' || overlay.id === 'rb-auth-modal-overlay') return;
+
+        var closeBtn = overlay.querySelector('.sp-modal__close');
+        var cancelBtns = overlay.querySelectorAll('[id$="-cancel"]');
+
+        if (closeBtn) {
+            closeBtn.addEventListener('click', function () {
+                closeGenericModal(overlay);
+            });
+        }
+        cancelBtns.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                closeGenericModal(overlay);
+            });
+        });
+
+        overlay.addEventListener('click', function (e) {
+            if (e.target === overlay) closeGenericModal(overlay);
+        });
+    });
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Escape') return;
+        // Find the top-most visible modal overlay.
+        var visible = null;
+        queryAll('.sp-modal-overlay').forEach(function (o) {
+            if (o.style.display === 'flex' || (o.style.display !== 'none' && getComputedStyle(o).display !== 'none')) {
+                visible = o;
+            }
+        });
+        if (!visible) return;
+        // Auth modal and backup popup have their own Escape handlers — delegate.
+        if (visible.id === 'rb-auth-modal-overlay') {
+            closeAuthModal();
+        } else if (visible.id === 'rb-backup-popup-overlay') {
+            closeBackupPopup();
+        } else {
+            closeGenericModal(visible);
+        }
+    });
+
+    document.addEventListener('click', function (e) {
+        var openBtn = e.target.closest('[data-open-modal]');
+        if (openBtn) {
+            e.preventDefault();
+            openGenericModal(openBtn.getAttribute('data-open-modal'), openBtn.getAttribute('data-open-tab') || null);
+        }
+    });
+
     /* ── Monitor page actions / live refresh ─────────── */
     var monitorConfig = rbAdmin.monitor || null;
     var monitorSnapshotTimer = null;
@@ -580,7 +1302,7 @@
 
     function monitorExpandedUrls() {
         var expanded = [];
-        queryAll('.sp-history-detail[data-url], .rb-history-detail[data-url]').forEach(function (row) {
+        queryAll('.sp-history-detail[data-url]').forEach(function (row) {
             if (row.style.display !== 'none') {
                 expanded.push(row.getAttribute('data-url'));
             }
@@ -590,7 +1312,7 @@
 
     function restoreMonitorExpandedUrls(urls) {
         (urls || []).forEach(function (url) {
-            var row = queryOne('.sp-history-detail[data-url="' + url + '"], .rb-history-detail[data-url="' + url + '"]');
+            var row = queryOne('.sp-history-detail[data-url="' + url + '"]');
             if (row) {
                 row.style.display = 'table-row';
             }
@@ -712,7 +1434,7 @@
     }
 
     document.addEventListener('click', function (e) {
-        var actionLink = e.target.closest('.sp-monitor-action, .rb-monitor-action, .rbm-monitor-action');
+        var actionLink = e.target.closest('.sp-monitor-action');
         if (actionLink && monitorEnabled()) {
             e.preventDefault();
 
@@ -749,11 +1471,11 @@
             return;
         }
 
-        var row = e.target.closest('.sp-monitor-row, .rb-monitor-row');
+        var row = e.target.closest('.sp-monitor-row');
         if (!row || e.target.closest('a, button')) return;
 
         var url = row.getAttribute('data-url');
-        var detail = queryOne('.sp-history-detail[data-url="' + url + '"], .rb-history-detail[data-url="' + url + '"]');
+        var detail = queryOne('.sp-history-detail[data-url="' + url + '"]');
         if (detail) {
             detail.style.display = detail.style.display === 'none' ? 'table-row' : 'none';
         }
@@ -762,4 +1484,51 @@
     if (monitorEnabled() && monitorConfig.active) {
         startMonitorPolling();
     }
+
+    /* ── Backup simulation (dev only) ─────────────────── */
+    var simTimer = null;
+
+    function startSimulation() {
+        var body = new FormData();
+        body.append('action', 'rb_simulate_backup');
+        body.append('_nonce', rbAdmin.nonce);
+        body.append('sim_action', 'start');
+
+        setBackupUiBusy(true);
+        updateProgressText('database');
+
+        postAjax(body).then(function (d) {
+            if (!d.success || !d.data || !d.data.jobId) {
+                throw new Error(ajaxErrorMessage(d));
+            }
+            startStatusPolling(d.data.jobId);
+            clearInterval(statusPollTimer);
+            statusPollTimer = setInterval(pollBackupStatus, 500);
+            simTimer = setInterval(tickSimulation, 200);
+        }).catch(function (err) {
+            setBackupUiBusy(false);
+            removeBackupModal();
+            showResult('Simulation failed: ' + err.message, 'error');
+        });
+    }
+
+    function tickSimulation() {
+        var body = new FormData();
+        body.append('action', 'rb_simulate_backup');
+        body.append('_nonce', rbAdmin.nonce);
+        body.append('sim_action', 'tick');
+
+        postAjax(body).then(function (d) {
+            if (d.success && d.data && d.data.done) {
+                clearInterval(simTimer);
+                simTimer = null;
+            }
+        }).catch(function () {
+            clearInterval(simTimer);
+            simTimer = null;
+        });
+    }
+
+    // Expose for console: rbSimulateBackup()
+    window.rbSimulateBackup = startSimulation;
 })();

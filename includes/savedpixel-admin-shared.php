@@ -134,6 +134,10 @@ if ( ! function_exists( 'savedpixel_admin_pages_config' ) ) {
 				'title'           => 'SEO Shield',
 				'overview_copy'   => 'Block junk search traffic, harden crawl-facing endpoints, and manage SEO protection rules from one place.',
 			),
+			'savedpixel-woocommerce-settings-porter' => array(
+				'title'           => 'WooCommerce Settings Porter',
+				'overview_copy'   => 'Export and import WooCommerce settings in bulk so stores can move or restore configuration safely.',
+			),
 			'savedpixel-remote-backup-monitor' => array(
 				'title'           => 'Backup Monitor',
 				'overview_copy'   => 'Track site status, poll remote installs, and review pulled backup history from one place.',

@@ -80,12 +80,19 @@ class Remote_Backup_Runner {
                     'db_size' => $entry['db_size'],
                 )
             );
+            $this->set_progress( 'database', array(
+                'db_size'    => $entry['db_size'],
+                'total_size' => $entry['db_size'],
+            ) );
         }
 
         // Files backup.
         if ( in_array( $scope, array( 'files', 'both' ), true ) ) {
             $effective_folders = $this->resolve_file_folders( $folders );
-            $this->set_progress( 'files' );
+            $this->set_progress( 'files', array(
+                'db_size'    => $entry['db_size'],
+                'total_size' => $entry['db_size'],
+            ) );
             $result = $this->backup_files( $id, $effective_folders );
             if ( is_wp_error( $result ) ) {
                 return $this->fail_backup_run( $entry, $result->get_error_message(), 'files' );
@@ -99,10 +106,19 @@ class Remote_Backup_Runner {
                     'files_size' => $entry['files_size'],
                 )
             );
+            $this->set_progress( 'files', array(
+                'db_size'    => $entry['db_size'],
+                'files_size' => $entry['files_size'],
+                'total_size' => $entry['db_size'] + $entry['files_size'],
+            ) );
 
             if ( $this->should_create_plugins_archive( $effective_folders ) ) {
                 // Plugins-only convenience archive for full file backups.
-                $this->set_progress( 'plugins' );
+                $this->set_progress( 'plugins', array(
+                    'db_size'    => $entry['db_size'],
+                    'files_size' => $entry['files_size'],
+                    'total_size' => $entry['db_size'] + $entry['files_size'],
+                ) );
                 $result = $this->backup_plugins( $id );
                 if ( is_wp_error( $result ) ) {
                     return $this->fail_backup_run( $entry, $result->get_error_message(), 'plugins' );
@@ -116,6 +132,11 @@ class Remote_Backup_Runner {
                         'plugins_size' => $entry['plugins_size'],
                     )
                 );
+                $this->set_progress( 'plugins', array(
+                    'db_size'    => $entry['db_size'],
+                    'files_size' => $entry['files_size'] + $entry['plugins_size'],
+                    'total_size' => $entry['db_size'] + $entry['files_size'] + $entry['plugins_size'],
+                ) );
             } else {
                 $this->log( 'Skipping plugins-only archive because a custom folder selection is active.' );
             }
@@ -149,7 +170,11 @@ class Remote_Backup_Runner {
             }
         }
 
-        $this->set_progress( 'complete' );
+        $this->set_progress( 'complete', array(
+            'db_size'    => $entry['db_size'],
+            'files_size' => $entry['files_size'] + $entry['plugins_size'],
+            'total_size' => $entry['total_size'],
+        ) );
         $this->log( "Backup completed — id: {$id}, total: " . size_format( $entry['total_size'] ) );
 
         return $entry;
@@ -192,12 +217,29 @@ class Remote_Backup_Runner {
 
     /* ── Progress tracking via transient ──────────────── */
 
-    public function set_progress( $phase ) {
-        set_transient( 'rb_backup_progress', $phase, 600 );
+    public function set_progress( $phase, $sizes = array() ) {
+        $data = array_merge(
+            array(
+                'phase'      => $phase,
+                'db_size'    => 0,
+                'files_size' => 0,
+                'total_size' => 0,
+            ),
+            $sizes
+        );
+        set_transient( 'rb_backup_progress', $data, 600 );
     }
 
     public function get_progress() {
-        return get_transient( 'rb_backup_progress' ) ?: 'idle';
+        $data = get_transient( 'rb_backup_progress' );
+        if ( is_array( $data ) ) {
+            return $data;
+        }
+        // Legacy string value.
+        if ( is_string( $data ) && '' !== $data ) {
+            return array( 'phase' => $data, 'db_size' => 0, 'files_size' => 0, 'total_size' => 0 );
+        }
+        return array( 'phase' => 'idle', 'db_size' => 0, 'files_size' => 0, 'total_size' => 0 );
     }
 
     /* ── Database dump ────────────────────────────────── */
@@ -281,18 +323,33 @@ class Remote_Backup_Runner {
                 }
             }
 
-            // Always include root-level files.
+            // Separate root files from root directories in the selection.
+            $top_files = array();
+            $real_dirs = array();
+            foreach ( $top_dirs as $td ) {
+                if ( is_file( $base_dir . $td ) ) {
+                    $top_files[] = $td;
+                } else {
+                    $real_dirs[] = $td;
+                }
+            }
+
+            // Include selected root-level files.
+            foreach ( $top_files as $tf ) {
+                $this->add_file_to_archive_list( $base_dir . $tf, $tf, $files, $exclude );
+            }
+
+            // Process directories.
             foreach ( scandir( $base_dir ) as $item ) {
                 if ( '.' === $item || '..' === $item ) {
                     continue;
                 }
                 $full = $base_dir . $item;
                 if ( ! is_dir( $full ) ) {
-                    $this->add_file_to_archive_list( $full, $item, $files, $exclude );
                     continue;
                 }
 
-                if ( in_array( $item, $top_dirs, true ) ) {
+                if ( in_array( $item, $real_dirs, true ) ) {
                     // Top-level selected — include entire directory.
                     $this->collect_directory_files( $full . '/', $item . '/', $files, $exclude );
                 } elseif ( isset( $sub_paths[ $item ] ) ) {

@@ -33,12 +33,25 @@ class Remote_Backup_Plugin {
         require_once RB_PLUGIN_DIR . 'includes/class-remote-backup-scheduler.php';
         require_once RB_PLUGIN_DIR . 'includes/class-remote-backup-api.php';
         require_once RB_PLUGIN_DIR . 'includes/class-remote-backup-admin.php';
+        require_once RB_PLUGIN_DIR . 'includes/providers/interface-remote-provider.php';
+        require_once RB_PLUGIN_DIR . 'includes/providers/class-provider-ssh.php';
+        require_once RB_PLUGIN_DIR . 'includes/providers/class-provider-ftp.php';
+        require_once RB_PLUGIN_DIR . 'includes/providers/class-provider-google-drive.php';
+        require_once RB_PLUGIN_DIR . 'includes/providers/class-provider-onedrive.php';
+        require_once RB_PLUGIN_DIR . 'includes/providers/class-provider-dropbox.php';
 
         $this->logger    = new Remote_Backup_Logger();
         $this->storage   = new Remote_Backup_Storage();
         $this->runner    = new Remote_Backup_Runner( $this->storage, $this->logger );
         $this->downloads = new Remote_Backup_Downloads( $this->storage );
         $this->scheduler = new Remote_Backup_Scheduler( $this->runner, $this->logger, $this->storage );
+
+        $this->scheduler->register_provider( new Provider_SSH() );
+        $this->scheduler->register_provider( new Provider_FTP() );
+        $this->scheduler->register_provider( new Provider_Google_Drive() );
+        $this->scheduler->register_provider( new Provider_OneDrive() );
+        $this->scheduler->register_provider( new Provider_Dropbox() );
+
         $this->admin     = new Remote_Backup_Admin( $this->storage, $this->runner, $this->downloads, $this->logger, $this->scheduler );
         $this->api       = new Remote_Backup_Api( $this->storage, $this->scheduler, $this->admin );
     }

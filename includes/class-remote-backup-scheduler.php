@@ -3,12 +3,14 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-// phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink, WordPress.WP.AlternativeFunctions.file_system_operations_chmod, WordPress.PHP.DevelopmentFunctions.error_log_set_error_handler -- Backup transport helpers manage temp files and captured warnings directly.
 class Remote_Backup_Scheduler {
 
     private $runner;
     private $logger;
     private $storage;
+
+    /** @var Remote_Provider[] */
+    private $providers = array();
 
     const CRON_HOOK          = 'rb_scheduled_backup';
     const CRON_HOOK_DATABASE = 'rb_scheduled_backup_database';
@@ -23,6 +25,39 @@ class Remote_Backup_Scheduler {
         add_action( self::CRON_HOOK_DATABASE, array( $this, 'run_scheduled_database' ) );
         add_action( self::CRON_HOOK_FILES, array( $this, 'run_scheduled_files' ) );
         add_filter( 'cron_schedules', array( $this, 'add_schedules' ) );
+    }
+
+    /**
+     * Register a remote storage provider.
+     */
+    public function register_provider( Remote_Provider $provider ) {
+        $this->providers[ $provider->get_key() ] = $provider;
+    }
+
+    /**
+     * Get the currently active provider based on the rb_remote_protocol option.
+     *
+     * @return Remote_Provider|null
+     */
+    public function get_provider( ?string $key = null ): ?Remote_Provider {
+        $key = $key ?? $this->get_active_protocol();
+        return $this->providers[ $key ] ?? null;
+    }
+
+    /**
+     * Get all registered providers.
+     *
+     * @return Remote_Provider[]
+     */
+    public function get_providers(): array {
+        return $this->providers;
+    }
+
+    /**
+     * Get the stored protocol key.
+     */
+    public function get_active_protocol(): string {
+        return sanitize_text_field( (string) get_option( 'rb_remote_protocol', 'ssh' ) );
     }
 
     public function add_schedules( $schedules ) {
@@ -57,7 +92,7 @@ class Remote_Backup_Scheduler {
     }
 
     private function run_scheduled_scope( $scope ) {
-        $remote_mode = $this->normalize_remote_mode( get_option( 'rb_scheduled_remote_mode', 'remote' ) );
+        $remote_mode = $this->normalize_remote_mode( get_option( "rb_scheduled_remote_mode_{$scope}", 'remote' ) );
         $this->logger->log( "Scheduled backup started — scope: {$scope}, delivery: {$remote_mode}" );
 
         $result = $this->runner->run( $scope );
@@ -115,48 +150,47 @@ class Remote_Backup_Scheduler {
     }
 
     public function has_remote_target() {
-        $settings = $this->get_remote_settings();
-        return ! empty( $settings['host'] );
+        $provider = $this->get_provider();
+        return $provider && $provider->is_ready();
     }
 
     public function send_backup_to_remote( $backup, $context = 'Backup' ) {
-        $settings = $this->get_remote_settings();
-        $target   = $this->format_remote_target( $settings );
+        $provider = $this->get_provider();
+        if ( ! $provider ) {
+            $message = 'Remote upload failed: no provider is configured for protocol "' . $this->get_active_protocol() . '".';
+            $this->logger->log( "{$context} remote upload FAILED: no provider configured.", 'error' );
+            return $this->finalize_remote_result( $backup, 'failed', $message, array() );
+        }
 
-        $validation = $this->validate_remote_settings( $settings, true );
+        $settings = $provider->get_settings();
+        $target   = $provider->format_destination( $settings );
+
+        $validation = $provider->validate_settings( $settings );
         if ( is_wp_error( $validation ) ) {
             $message = 'Remote upload failed: ' . $validation->get_error_message();
             $this->logger->log( "{$context} remote upload FAILED: {$validation->get_error_message()}", 'error' );
             return $this->finalize_remote_result( $backup, 'failed', $message, $settings );
         }
 
-        $runtime = $this->prepare_runtime_settings( $settings );
+        $runtime = $provider->prepare( $settings );
         if ( is_wp_error( $runtime ) ) {
             $message = 'Remote upload failed: ' . $runtime->get_error_message();
             $this->logger->log( "{$context} remote upload FAILED: {$runtime->get_error_message()}", 'error' );
             return $this->finalize_remote_result( $backup, 'failed', $message, $settings );
         }
 
-        $this->logger->log( "{$context} remote upload started — {$target} (auth: {$settings['auth']})" );
-
-        $directory = $this->ensure_remote_directory( $runtime );
-        if ( is_wp_error( $directory ) ) {
-            $this->cleanup_runtime_settings( $runtime );
-            $message = 'Remote upload failed: ' . $directory->get_error_message();
-            $this->logger->log( "{$context} remote upload FAILED: {$directory->get_error_message()}", 'error' );
-            return $this->finalize_remote_result( $backup, 'failed', $message, $settings );
-        }
+        $this->logger->log( "{$context} remote upload started — {$target}" );
 
         $files = $this->collect_backup_artifacts( $backup );
         if ( is_wp_error( $files ) ) {
-            $this->cleanup_runtime_settings( $runtime );
+            $provider->cleanup( $runtime );
             $message = 'Remote upload failed: ' . $files->get_error_message();
             $this->logger->log( "{$context} remote upload FAILED: {$files->get_error_message()}", 'error' );
             return $this->finalize_remote_result( $backup, 'failed', $message, $settings );
         }
 
         if ( empty( $files ) ) {
-            $this->cleanup_runtime_settings( $runtime );
+            $provider->cleanup( $runtime );
             $message = 'Remote upload skipped: no backup artifacts were available to upload.';
             $this->logger->log( "{$context} remote upload skipped — no files found.", 'warning' );
             return $this->finalize_remote_result( $backup, 'skipped', $message, $settings );
@@ -164,14 +198,13 @@ class Remote_Backup_Scheduler {
 
         $errors = array();
         foreach ( $files as $local_path ) {
-            $remote_dest = $this->join_remote_path( $settings['path'], basename( $local_path ) );
-            $transfer    = $this->transfer_file_to_remote( $runtime, $local_path, $remote_dest );
+            $transfer = $provider->send( $runtime, $local_path, basename( $local_path ) );
             if ( is_wp_error( $transfer ) ) {
                 $errors[] = basename( $local_path ) . ': ' . $transfer->get_error_message();
             }
         }
 
-        $this->cleanup_runtime_settings( $runtime );
+        $provider->cleanup( $runtime );
 
         if ( ! empty( $errors ) ) {
             $summary = $this->summarize_messages( $errors );
@@ -195,62 +228,19 @@ class Remote_Backup_Scheduler {
     }
 
     public function test_connection() {
-        $settings   = $this->get_remote_settings();
-        $validation = $this->validate_remote_settings( $settings, false );
+        $provider = $this->get_provider();
+        if ( ! $provider ) {
+            return new WP_Error( 'no_provider', 'No provider is configured for protocol "' . $this->get_active_protocol() . '".' );
+        }
+
+        $settings   = $provider->get_settings();
+        $validation = $provider->validate_settings( $settings );
 
         if ( is_wp_error( $validation ) ) {
             return $validation;
         }
 
-        if ( 'ftp' === $settings['protocol'] ) {
-            return $this->test_ftp_connection( $settings );
-        }
-
-        $runtime = $this->prepare_runtime_settings( $settings );
-        if ( is_wp_error( $runtime ) ) {
-            return $runtime;
-        }
-
-        $probe_file = $this->join_remote_path( $settings['path'], '.rb-write-test-' . wp_generate_password( 8, false, false ) );
-        $command    = sprintf(
-            'if [ -d %1$s ]; then echo RB_DIR_EXISTS; else mkdir -p %1$s && echo RB_DIR_CREATED || echo RB_DIR_CREATE_FAILED; fi; if touch %2$s 2>/dev/null; then rm -f %2$s && echo RB_WRITE_OK; else echo RB_WRITE_FAILED; fi',
-            escapeshellarg( $settings['path'] ),
-            escapeshellarg( $probe_file )
-        );
-
-        $result = $this->execute_ssh_command( $runtime, $command, 15 );
-        $this->cleanup_runtime_settings( $runtime );
-
-        if ( is_wp_error( $result ) ) {
-            return $result;
-        }
-
-        $text = $result['text'];
-
-        if ( false !== strpos( $text, 'RB_DIR_CREATE_FAILED' ) ) {
-            return new WP_Error(
-                'remote_dir_create_failed',
-                sprintf( 'Connected OK — but the remote directory could not be created: %s', $settings['path'] )
-            );
-        }
-
-        if ( false !== strpos( $text, 'RB_WRITE_FAILED' ) ) {
-            $message = sprintf( 'Connected OK — but the remote path is not writable by `%s`: %s', $settings['username'], $settings['path'] );
-            if ( '/' === $settings['path'] ) {
-                $message .= ' Use a writable backup directory such as `/home/backups/example-site` or another path owned by that user.';
-            }
-            return new WP_Error( 'remote_path_not_writable', $message );
-        }
-
-        if ( false !== strpos( $text, 'RB_DIR_CREATED' ) ) {
-            return 'Connected OK — remote directory was created and is writable.';
-        }
-
-        if ( false !== strpos( $text, 'RB_DIR_EXISTS' ) ) {
-            return 'Connected OK — remote directory exists and is writable.';
-        }
-
-        return 'Connected OK — authentication succeeded.';
+        return $provider->test_connection( $settings );
     }
 
     public function next_scheduled( $scope = null ) {
@@ -546,310 +536,6 @@ class Remote_Backup_Scheduler {
         return 'remote' === sanitize_text_field( (string) $value ) ? 'remote' : 'local';
     }
 
-    private function normalize_remote_protocol( $value ) {
-        return 'ftp' === sanitize_text_field( (string) $value ) ? 'ftp' : 'ssh';
-    }
-
-    private function get_remote_settings() {
-        $protocol = $this->normalize_remote_protocol( get_option( 'rb_remote_protocol', 'ssh' ) );
-        $path     = trim( (string) get_option( 'ssh' === $protocol ? 'rb_ssh_path' : 'rb_ftp_path', '' ) );
-        if ( '/' !== $path ) {
-            $path = rtrim( $path, '/' );
-        }
-
-        if ( 'ftp' === $protocol ) {
-            return array(
-                'protocol' => 'ftp',
-                'host'     => trim( (string) get_option( 'rb_ftp_host', '' ) ),
-                'port'     => absint( get_option( 'rb_ftp_port', 21 ) ) ?: 21,
-                'username' => trim( (string) get_option( 'rb_ftp_username', '' ) ),
-                'password' => (string) get_option( 'rb_ftp_password', '' ),
-                'path'     => $path,
-                'passive'  => (bool) get_option( 'rb_ftp_passive', 1 ),
-                'auth'     => 'password',
-            );
-        }
-
-        return array(
-            'protocol' => 'ssh',
-            'host'     => trim( (string) get_option( 'rb_ssh_host', '' ) ),
-            'port'     => absint( get_option( 'rb_ssh_port', 22 ) ) ?: 22,
-            'username' => trim( (string) get_option( 'rb_ssh_username', '' ) ),
-            'auth'     => get_option( 'rb_ssh_auth_method', 'key' ),
-            'path'     => $path,
-            'key'      => (string) get_option( 'rb_ssh_key', '' ),
-            'password' => (string) get_option( 'rb_ssh_password', '' ),
-        );
-    }
-
-    private function validate_remote_settings( $settings, $require_scp ) {
-        if ( 'ftp' === $settings['protocol'] ) {
-            return $this->validate_ftp_settings( $settings );
-        }
-
-        return $this->validate_ssh_settings( $settings, $require_scp );
-    }
-
-    private function validate_ssh_settings( $settings, $require_scp ) {
-        if ( empty( $settings['host'] ) ) {
-            return new WP_Error( 'missing_host', 'Host is required.' );
-        }
-
-        if ( empty( $settings['username'] ) ) {
-            return new WP_Error( 'missing_username', 'Username is required.' );
-        }
-
-        if ( empty( $settings['path'] ) ) {
-            return new WP_Error( 'missing_path', 'Remote path is required.' );
-        }
-
-        if ( ! in_array( $settings['auth'], array( 'key', 'password' ), true ) ) {
-            return new WP_Error( 'invalid_auth', 'Authentication method must be `key` or `password`.' );
-        }
-
-        if ( ! $this->command_available( 'ssh' ) ) {
-            return new WP_Error( 'missing_ssh', 'The `ssh` command is not installed on this server.' );
-        }
-
-        if ( $require_scp && ! $this->command_available( 'scp' ) ) {
-            return new WP_Error( 'missing_scp', 'The `scp` command is not installed on this server.' );
-        }
-
-        if ( 'password' === $settings['auth'] ) {
-            if ( empty( $settings['password'] ) ) {
-                return new WP_Error( 'missing_password', 'Password authentication is selected, but no password is configured.' );
-            }
-            if ( ! $this->command_available( 'sshpass' ) ) {
-                return new WP_Error( 'missing_sshpass', 'Password authentication requires the `sshpass` command on this server.' );
-            }
-        } else {
-            if ( empty( trim( $settings['key'] ) ) ) {
-                return new WP_Error( 'missing_key', 'SSH private key authentication is selected, but no private key is configured.' );
-            }
-        }
-
-        return true;
-    }
-
-    private function validate_ftp_settings( $settings ) {
-        if ( empty( $settings['host'] ) ) {
-            return new WP_Error( 'missing_host', 'FTP host is required.' );
-        }
-
-        if ( empty( $settings['username'] ) ) {
-            return new WP_Error( 'missing_username', 'FTP username is required.' );
-        }
-
-        if ( empty( $settings['password'] ) ) {
-            return new WP_Error( 'missing_password', 'FTP password is required.' );
-        }
-
-        if ( empty( $settings['path'] ) ) {
-            return new WP_Error( 'missing_path', 'Remote path is required.' );
-        }
-
-        if ( ! function_exists( 'ftp_connect' ) ) {
-            return new WP_Error( 'missing_ftp', 'The PHP FTP extension is not available on this server.' );
-        }
-
-        return true;
-    }
-
-    private function command_available( $command ) {
-        $path = trim( (string) shell_exec( 'command -v ' . escapeshellarg( $command ) . ' 2>/dev/null' ) );
-        return '' !== $path;
-    }
-
-    private function prepare_runtime_settings( $settings ) {
-        if ( 'ftp' === $settings['protocol'] ) {
-            return $this->prepare_ftp_runtime_settings( $settings );
-        }
-
-        $runtime = $settings;
-        $runtime['key_file'] = null;
-
-        if ( 'key' !== $settings['auth'] ) {
-            return $runtime;
-        }
-
-        $normalized_key = $this->normalize_private_key( $settings['key'] );
-        $key_check      = $this->validate_private_key_text( $normalized_key );
-        if ( is_wp_error( $key_check ) ) {
-            return $key_check;
-        }
-
-        $key_file = tempnam( sys_get_temp_dir(), 'rb_key_' );
-        if ( false === $key_file ) {
-            return new WP_Error( 'key_temp', 'Failed to create a temporary private key file.' );
-        }
-
-        if ( false === file_put_contents( $key_file, $normalized_key ) ) {
-            @unlink( $key_file );
-            return new WP_Error( 'key_write', 'Failed to write the temporary private key file.' );
-        }
-
-        chmod( $key_file, 0600 );
-        $runtime['key_file'] = $key_file;
-
-        $key_check = $this->validate_private_key_file( $key_file );
-        if ( is_wp_error( $key_check ) ) {
-            $this->cleanup_runtime_settings( $runtime );
-            return $key_check;
-        }
-
-        return $runtime;
-    }
-
-    private function prepare_ftp_runtime_settings( $settings ) {
-        $runtime = $settings;
-        $warning        = '';
-        $runtime['ftp'] = $this->call_with_warning_capture(
-            static function() use ( $settings ) {
-                return ftp_connect( $settings['host'], $settings['port'], 20 );
-            },
-            $warning
-        );
-
-        if ( ! $runtime['ftp'] ) {
-            return new WP_Error(
-                'ftp_connect_failed',
-                'Could not connect to the FTP server. Check the host, port, or firewall.' . $this->format_ftp_warning( $warning )
-            );
-        }
-
-        if ( function_exists( 'ftp_set_option' ) && defined( 'FTP_TIMEOUT_SEC' ) ) {
-            @ftp_set_option( $runtime['ftp'], FTP_TIMEOUT_SEC, 30 );
-        }
-
-        $warning = '';
-        $logged_in = $this->call_with_warning_capture(
-            static function() use ( $runtime, $settings ) {
-                return ftp_login( $runtime['ftp'], $settings['username'], $settings['password'] );
-            },
-            $warning
-        );
-
-        if ( ! $logged_in ) {
-            @ftp_close( $runtime['ftp'] );
-            return new WP_Error(
-                'ftp_login_failed',
-                'FTP authentication failed. Check the username and password.' . $this->format_ftp_warning( $warning )
-            );
-        }
-
-        $warning = '';
-        $passive = $this->call_with_warning_capture(
-            static function() use ( $runtime, $settings ) {
-                return ftp_pasv( $runtime['ftp'], ! empty( $settings['passive'] ) );
-            },
-            $warning
-        );
-
-        if ( ! $passive ) {
-            @ftp_close( $runtime['ftp'] );
-            return new WP_Error(
-                'ftp_passive_failed',
-                'Connected to FTP, but failed to switch transfer mode. Toggle passive mode or check the server configuration.' . $this->format_ftp_warning( $warning )
-            );
-        }
-
-        return $runtime;
-    }
-
-    private function normalize_private_key( $key ) {
-        $key = (string) $key;
-        $key = preg_replace( '/^\xEF\xBB\xBF/', '', $key );
-        $key = trim( $key );
-
-        if ( false === strpos( $key, "\n" ) && false !== strpos( $key, '\\n' ) ) {
-            $key = str_replace( array( '\\r\\n', '\\n', '\\r' ), "\n", $key );
-        }
-
-        $key = str_replace( array( "\r\n", "\r" ), "\n", $key );
-
-        $lines = array_map(
-            static function( $line ) {
-                return trim( $line );
-            },
-            explode( "\n", $key )
-        );
-        $lines = array_values( array_filter( $lines, static function( $line ) {
-            return '' !== $line;
-        } ) );
-
-        if ( empty( $lines ) ) {
-            return '';
-        }
-
-        return implode( "\n", $lines ) . "\n";
-    }
-
-    private function validate_private_key_text( $key ) {
-        if ( '' === trim( $key ) ) {
-            return new WP_Error( 'missing_key', 'No SSH private key is configured.' );
-        }
-
-        $first_line = strtok( $key, "\n" );
-        if ( false !== $first_line && preg_match( '/^(ssh-(rsa|ed25519)|ecdsa-sha2-)/', trim( $first_line ) ) ) {
-            return new WP_Error( 'public_key', 'The value in the Private Key field looks like a public key. Paste the private key instead.' );
-        }
-
-        if ( ! preg_match( '/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/', $key ) ) {
-            return new WP_Error( 'invalid_key_header', 'The private key header is missing or invalid.' );
-        }
-
-        if ( ! preg_match( '/-----END [A-Z0-9 ]*PRIVATE KEY-----/', $key ) ) {
-            return new WP_Error( 'invalid_key_footer', 'The private key footer is missing or invalid.' );
-        }
-
-        return true;
-    }
-
-    private function validate_private_key_file( $key_file ) {
-        if ( ! $this->command_available( 'ssh-keygen' ) ) {
-            return true;
-        }
-
-        $output     = array();
-        $return_var = 0;
-        $cmd        = sprintf(
-            'ssh-keygen -y -P "" -f %s 2>&1',
-            escapeshellarg( $key_file )
-        );
-
-        exec( $cmd, $output, $return_var );
-
-        if ( 0 === $return_var ) {
-            return true;
-        }
-
-        $text       = $this->sanitize_process_output( $output );
-        $normalized = strtolower( $text );
-
-        if ( false !== strpos( $normalized, 'incorrect passphrase supplied' ) || false !== strpos( $normalized, 'passphrase' ) ) {
-            return new WP_Error( 'encrypted_key', 'This private key is passphrase-protected. The plugin only supports unencrypted private keys.' );
-        }
-
-        if ( false !== strpos( $normalized, 'invalid format' ) || false !== strpos( $normalized, 'error in libcrypto' ) ) {
-            return new WP_Error( 'invalid_key_format', 'The private key format is invalid. Re-save it as an unencrypted OpenSSH or PEM private key and paste it again.' );
-        }
-
-        return new WP_Error(
-            'invalid_key',
-            'The private key could not be read by `ssh-keygen`.' . ( '' !== $text ? ' Details: ' . $this->summarize_messages( array( $text ), 1, 180 ) : '' )
-        );
-    }
-
-    private function cleanup_runtime_settings( $runtime ) {
-        if ( ! empty( $runtime['ftp'] ) ) {
-            @ftp_close( $runtime['ftp'] );
-        }
-
-        if ( ! empty( $runtime['key_file'] ) && file_exists( $runtime['key_file'] ) ) {
-            unlink( $runtime['key_file'] );
-        }
-    }
-
     private function collect_backup_artifacts( $backup ) {
         $files = array();
 
@@ -869,416 +555,6 @@ class Remote_Backup_Scheduler {
         return $files;
     }
 
-    private function ensure_remote_directory( $settings ) {
-        if ( 'ftp' === $settings['protocol'] ) {
-            return $this->ensure_ftp_remote_directory( $settings );
-        }
-
-        $command = sprintf(
-            'mkdir -p %1$s && test -d %1$s',
-            escapeshellarg( $settings['path'] )
-        );
-
-        $result = $this->execute_ssh_command( $settings, $command, 20 );
-        if ( is_wp_error( $result ) ) {
-            return new WP_Error( 'remote_dir', 'Could not prepare the remote directory: ' . $result->get_error_message() );
-        }
-
-        return true;
-    }
-
-    private function ensure_ftp_remote_directory( $settings ) {
-        $ftp          = $settings['ftp'];
-        $path         = $settings['path'];
-        $original_dir = @ftp_pwd( $ftp );
-
-        if ( $this->ftp_directory_exists( $ftp, $path ) ) {
-            $this->restore_ftp_directory( $ftp, $original_dir );
-            return true;
-        }
-
-        $segments    = array_values( array_filter( explode( '/', trim( $path, '/' ) ), 'strlen' ) );
-        $is_absolute = '/' === substr( $path, 0, 1 );
-        $warning     = '';
-
-        if ( $is_absolute ) {
-            $root_changed = $this->call_with_warning_capture(
-                static function() use ( $ftp ) {
-                    return ftp_chdir( $ftp, '/' );
-                },
-                $warning
-            );
-
-            if ( ! $root_changed ) {
-                $this->restore_ftp_directory( $ftp, $original_dir );
-                return new WP_Error(
-                    'ftp_root_failed',
-                    'Connected to FTP, but could not access the server root for the configured remote path.' . $this->format_ftp_warning( $warning )
-                );
-            }
-        }
-
-        if ( empty( $segments ) ) {
-            $this->restore_ftp_directory( $ftp, $original_dir );
-            return true;
-        }
-
-        foreach ( $segments as $segment ) {
-            $warning = '';
-            $changed = $this->call_with_warning_capture(
-                static function() use ( $ftp, $segment ) {
-                    return ftp_chdir( $ftp, $segment );
-                },
-                $warning
-            );
-
-            if ( $changed ) {
-                continue;
-            }
-
-            $warning = '';
-            $created = $this->call_with_warning_capture(
-                static function() use ( $ftp, $segment ) {
-                    return ftp_mkdir( $ftp, $segment );
-                },
-                $warning
-            );
-
-            if ( false === $created ) {
-                $retry_changed = $this->call_with_warning_capture(
-                    static function() use ( $ftp, $segment ) {
-                        return ftp_chdir( $ftp, $segment );
-                    },
-                    $warning
-                );
-
-                if ( ! $retry_changed ) {
-                    $this->restore_ftp_directory( $ftp, $original_dir );
-                    return new WP_Error(
-                        'ftp_dir_failed',
-                        'Connected to FTP, but the remote directory could not be created or accessed: ' . $path . $this->format_ftp_warning( $warning )
-                    );
-                }
-
-                continue;
-            }
-
-            $warning = '';
-            $changed = $this->call_with_warning_capture(
-                static function() use ( $ftp, $segment ) {
-                    return ftp_chdir( $ftp, $segment );
-                },
-                $warning
-            );
-
-            if ( ! $changed ) {
-                $this->restore_ftp_directory( $ftp, $original_dir );
-                return new WP_Error(
-                    'ftp_dir_enter_failed',
-                    'Connected to FTP, but the remote directory was created and could not be accessed: ' . $path . $this->format_ftp_warning( $warning )
-                );
-            }
-        }
-
-        $this->restore_ftp_directory( $ftp, $original_dir );
-        return true;
-    }
-
-    private function transfer_file_to_remote( $settings, $local_path, $remote_dest ) {
-        if ( 'ftp' === $settings['protocol'] ) {
-            return $this->ftp_send( $settings, $local_path, $remote_dest );
-        }
-
-        return $this->scp_send( $settings, $local_path, $remote_dest );
-    }
-
-    private function scp_send( $settings, $local_path, $remote_dest ) {
-        $ssh_opts    = $this->build_ssh_options( $settings['auth'], 30 );
-        $remote_spec = escapeshellarg( $settings['username'] . '@' . $settings['host'] . ':' . $remote_dest );
-
-        if ( 'key' === $settings['auth'] ) {
-            $cmd = sprintf(
-                'scp %1$s -i %2$s -P %3$d %4$s %5$s 2>&1',
-                $ssh_opts,
-                escapeshellarg( $settings['key_file'] ),
-                $settings['port'],
-                escapeshellarg( $local_path ),
-                $remote_spec
-            );
-        } else {
-            $cmd = sprintf(
-                'sshpass -p %1$s scp %2$s -P %3$d %4$s %5$s 2>&1',
-                escapeshellarg( $settings['password'] ),
-                $ssh_opts,
-                $settings['port'],
-                escapeshellarg( $local_path ),
-                $remote_spec
-            );
-        }
-
-        $this->logger->log( 'SCP: ' . basename( $local_path ) . ' → ' . $remote_dest );
-
-        $output     = array();
-        $return_var = 0;
-        exec( $cmd, $output, $return_var );
-
-        if ( 0 !== $return_var ) {
-            $message = $this->format_process_failure( 'SCP transfer', $return_var, $output, $settings['auth'] );
-            $this->logger->log( 'SCP failed: ' . $message, 'error' );
-            return new WP_Error( 'scp_fail', $message );
-        }
-
-        $this->logger->log( 'SCP OK: ' . basename( $local_path ) );
-        return true;
-    }
-
-    private function ftp_send( $settings, $local_path, $remote_dest ) {
-        $this->logger->log( 'FTP: ' . basename( $local_path ) . ' → ' . $remote_dest );
-
-        $warning = '';
-        $sent    = $this->call_with_warning_capture(
-            static function() use ( $settings, $local_path, $remote_dest ) {
-                return ftp_put( $settings['ftp'], $remote_dest, $local_path, FTP_BINARY );
-            },
-            $warning
-        );
-
-        if ( ! $sent ) {
-            $message = 'FTP transfer failed.' . $this->format_ftp_warning( $warning, ' The remote path may not exist or may not be writable.' );
-            $this->logger->log( 'FTP failed: ' . $message, 'error' );
-            return new WP_Error( 'ftp_put_failed', $message );
-        }
-
-        $this->logger->log( 'FTP OK: ' . basename( $local_path ) );
-        return true;
-    }
-
-    private function test_ftp_connection( $settings ) {
-        $runtime = $this->prepare_runtime_settings( $settings );
-        if ( is_wp_error( $runtime ) ) {
-            return $runtime;
-        }
-
-        $ftp              = $runtime['ftp'];
-        $directory_exists = $this->ftp_directory_exists( $ftp, $settings['path'] );
-        $directory        = $this->ensure_ftp_remote_directory( $runtime );
-
-        if ( is_wp_error( $directory ) ) {
-            $this->cleanup_runtime_settings( $runtime );
-            return $directory;
-        }
-
-        $probe_local = tempnam( sys_get_temp_dir(), 'rb_ftp_test_' );
-        if ( false === $probe_local ) {
-            $this->cleanup_runtime_settings( $runtime );
-            return new WP_Error( 'ftp_probe_temp', 'Connected to FTP, but could not create a local test file.' );
-        }
-
-        if ( false === file_put_contents( $probe_local, 'Remote Backup FTP probe ' . gmdate( 'c' ) ) ) {
-            @unlink( $probe_local );
-            $this->cleanup_runtime_settings( $runtime );
-            return new WP_Error( 'ftp_probe_write', 'Connected to FTP, but could not write the local test file.' );
-        }
-
-        $probe_remote = $this->join_remote_path( $settings['path'], '.rb-write-test-' . wp_generate_password( 8, false, false ) );
-        $warning      = '';
-        $uploaded     = $this->call_with_warning_capture(
-            static function() use ( $ftp, $probe_local, $probe_remote ) {
-                return ftp_put( $ftp, $probe_remote, $probe_local, FTP_BINARY );
-            },
-            $warning
-        );
-        @unlink( $probe_local );
-
-        if ( ! $uploaded ) {
-            $this->cleanup_runtime_settings( $runtime );
-            return new WP_Error(
-                'ftp_probe_upload_failed',
-                'Connected to FTP, but failed to write a test file to `' . $settings['path'] . '`.' . $this->format_ftp_warning( $warning, ' The remote path may not exist or may not be writable.' )
-            );
-        }
-
-        $warning = '';
-        $deleted = $this->call_with_warning_capture(
-            static function() use ( $ftp, $probe_remote ) {
-                return ftp_delete( $ftp, $probe_remote );
-            },
-            $warning
-        );
-
-        $this->cleanup_runtime_settings( $runtime );
-
-        if ( ! $deleted ) {
-            $this->logger->log(
-                'FTP probe cleanup failed for ' . $probe_remote . $this->format_ftp_warning( $warning, '' ),
-                'warning'
-            );
-        }
-
-        if ( $directory_exists ) {
-            return 'Connected OK — FTP directory exists and is writable.';
-        }
-
-        return 'Connected OK — FTP directory was created and is writable.';
-    }
-
-    private function execute_ssh_command( $settings, $remote_command, $timeout = 15 ) {
-        $ssh_opts = $this->build_ssh_options( $settings['auth'], $timeout );
-        $target   = escapeshellarg( $settings['username'] . '@' . $settings['host'] );
-        $command  = escapeshellarg( $remote_command );
-
-        if ( 'key' === $settings['auth'] ) {
-            $cmd = sprintf(
-                'ssh %1$s -i %2$s -p %3$d %4$s %5$s 2>&1',
-                $ssh_opts,
-                escapeshellarg( $settings['key_file'] ),
-                $settings['port'],
-                $target,
-                $command
-            );
-        } else {
-            $cmd = sprintf(
-                'sshpass -p %1$s ssh %2$s -p %3$d %4$s %5$s 2>&1',
-                escapeshellarg( $settings['password'] ),
-                $ssh_opts,
-                $settings['port'],
-                $target,
-                $command
-            );
-        }
-
-        $output     = array();
-        $return_var = 0;
-        exec( $cmd, $output, $return_var );
-
-        if ( 0 !== $return_var ) {
-            return new WP_Error( 'ssh_fail', $this->format_process_failure( 'SSH connection', $return_var, $output, $settings['auth'] ) );
-        }
-
-        return array(
-            'output' => $output,
-            'text'   => $this->sanitize_process_output( $output ),
-        );
-    }
-
-    private function build_ssh_options( $auth, $timeout ) {
-        $options = array(
-            '-o StrictHostKeyChecking=no',
-            '-o UserKnownHostsFile=/dev/null',
-            '-o ConnectTimeout=' . absint( $timeout ),
-        );
-
-        if ( 'key' === $auth ) {
-            $options[] = '-o BatchMode=yes';
-        }
-
-        return implode( ' ', $options );
-    }
-
-    private function format_process_failure( $context, $return_var, $output, $auth ) {
-        $text       = $this->sanitize_process_output( $output );
-        $normalized = strtolower( $text );
-        $reason     = 'The remote server returned an unknown error.';
-
-        if ( false !== strpos( $normalized, 'permission denied' ) ) {
-            $reason = 'Authentication failed. Check the username and ' . ( 'password' === $auth ? 'password.' : 'private key.' );
-        } elseif ( false !== strpos( $normalized, 'publickey' ) ) {
-            $reason = 'The remote server rejected the SSH key for this user.';
-        } elseif ( false !== strpos( $normalized, 'error in libcrypto' ) ) {
-            $reason = 'The private key could not be parsed. It is usually malformed, uses Windows line endings, or is encrypted with a passphrase.';
-        } elseif ( false !== strpos( $normalized, 'incorrect passphrase supplied' ) || false !== strpos( $normalized, 'enter passphrase' ) ) {
-            $reason = 'This private key is passphrase-protected, and the plugin only supports unencrypted keys.';
-        } elseif ( false !== strpos( $normalized, 'connection refused' ) ) {
-            $reason = 'The SSH service is not accepting connections on this port.';
-        } elseif ( false !== strpos( $normalized, 'connection timed out' ) || false !== strpos( $normalized, 'operation timed out' ) ) {
-            $reason = 'The connection timed out. Check the host, port, firewall, or routing.';
-        } elseif ( false !== strpos( $normalized, 'no route to host' ) || false !== strpos( $normalized, 'network is unreachable' ) ) {
-            $reason = 'This server cannot reach the remote host.';
-        } elseif ( false !== strpos( $normalized, 'could not resolve hostname' ) || false !== strpos( $normalized, 'name or service not known' ) ) {
-            $reason = 'The hostname could not be resolved from this server.';
-        } elseif ( false !== strpos( $normalized, 'invalid format' ) ) {
-            $reason = 'The private key format is invalid or unsupported.';
-        } elseif ( false !== strpos( $normalized, 'bad permissions' ) || false !== strpos( $normalized, 'unprotected private key file' ) ) {
-            $reason = 'SSH rejected the private key file permissions.';
-        } elseif ( false !== strpos( $normalized, 'no such file or directory' ) ) {
-            $reason = 'The remote path or a required local file was not found.';
-        }
-
-        if ( '' !== $text ) {
-            $reason .= ' SSH said: ' . $this->summarize_messages( array( $text ), 1, 220 );
-        }
-
-        return sprintf( '%1$s failed (exit %2$d). %3$s', $context, $return_var, $reason );
-    }
-
-    private function sanitize_process_output( $output ) {
-        $lines = array();
-
-        foreach ( (array) $output as $line ) {
-            $line = trim( (string) $line );
-            if ( '' === $line ) {
-                continue;
-            }
-            if ( 0 === strpos( $line, 'Warning: Permanently added' ) ) {
-                continue;
-            }
-            $lines[] = $line;
-        }
-
-        return implode( "\n", $lines );
-    }
-
-    private function call_with_warning_capture( $callback, &$warning = '' ) {
-        $warning = '';
-        set_error_handler(
-            static function( $errno, $errstr ) use ( &$warning ) {
-                $warning = trim( (string) $errstr );
-                return true;
-            }
-        );
-
-        try {
-            return $callback();
-        } finally {
-            restore_error_handler();
-        }
-    }
-
-    private function format_ftp_warning( $warning, $fallback = '' ) {
-        $warning = trim( (string) $warning );
-        if ( '' === $warning ) {
-            return $fallback;
-        }
-
-        $warning = preg_replace( '/^ftp_[a-z_]+\(\):\s*/i', '', $warning );
-        return ' FTP said: ' . $warning;
-    }
-
-    private function ftp_directory_exists( $ftp, $path ) {
-        $original_dir = @ftp_pwd( $ftp );
-        $warning      = '';
-        $changed      = $this->call_with_warning_capture(
-            static function() use ( $ftp, $path ) {
-                return ftp_chdir( $ftp, $path );
-            },
-            $warning
-        );
-
-        if ( $changed && false !== $original_dir ) {
-            $this->restore_ftp_directory( $ftp, $original_dir );
-        }
-
-        return (bool) $changed;
-    }
-
-    private function restore_ftp_directory( $ftp, $directory ) {
-        if ( false === $directory || '' === $directory || null === $directory ) {
-            return;
-        }
-
-        @ftp_chdir( $ftp, $directory );
-    }
-
     private function summarize_messages( $messages, $max_items = 2, $max_chars = 260 ) {
         $messages = array_values( array_filter( array_map( 'trim', (array) $messages ) ) );
         if ( empty( $messages ) ) {
@@ -1296,11 +572,14 @@ class Remote_Backup_Scheduler {
     }
 
     private function finalize_remote_result( $backup, $status, $message, $settings ) {
+        $provider    = $this->get_provider();
+        $destination = $provider ? $provider->format_destination( $settings ) : '';
+
         $changes = array(
             'remote_status'      => $status,
             'remote_message'     => $message,
             'remote_uploaded_at' => 'success' === $status ? current_time( 'mysql' ) : null,
-            'remote_destination' => $this->format_remote_target( $settings ),
+            'remote_destination' => $destination,
         );
 
         $updated = $backup;
@@ -1320,51 +599,5 @@ class Remote_Backup_Scheduler {
             'message' => $message,
             'backup'  => $updated,
         );
-    }
-
-    private function format_remote_target( $settings ) {
-        $host     = $settings['host'] ?? '';
-        $username = $settings['username'] ?? '';
-        $path     = $settings['path'] ?? '';
-
-        if ( 'ftp' === ( $settings['protocol'] ?? 'ssh' ) ) {
-            $port   = absint( $settings['port'] ?? 21 ) ?: 21;
-            $target = 'ftp://';
-
-            if ( '' !== $username ) {
-                $target .= $username . '@';
-            }
-
-            $target .= $host;
-
-            if ( 21 !== $port ) {
-                $target .= ':' . $port;
-            }
-
-            if ( '' !== $path ) {
-                $target .= '/' . ltrim( $path, '/' );
-            }
-
-            return rtrim( $target, '/' );
-        }
-
-        $target = '';
-        if ( '' !== $username || '' !== $host ) {
-            $target = trim( $username . '@' . $host, '@' );
-        }
-
-        if ( '' !== $path ) {
-            $target .= ':' . $path;
-        }
-
-        return ltrim( $target, ':' );
-    }
-
-    private function join_remote_path( $base, $leaf ) {
-        if ( '/' === $base ) {
-            return '/' . ltrim( $leaf, '/' );
-        }
-
-        return rtrim( $base, '/' ) . '/' . ltrim( $leaf, '/' );
     }
 }
