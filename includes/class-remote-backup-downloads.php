@@ -16,7 +16,7 @@ class Remote_Backup_Downloads {
     }
 
     public function handle_download() {
-        if ( empty( $_GET['rb_download'] ) || empty( $_GET['rb_id'] ) ) {
+        if ( empty( $_GET['spsprb_download'] ) || empty( $_GET['sprb_id'] ) ) {
             return;
         }
 
@@ -24,10 +24,10 @@ class Remote_Backup_Downloads {
             wp_die( 'Unauthorized.', 403 );
         }
 
-        check_admin_referer( 'rb_download' );
+        check_admin_referer( 'spsprb_download' );
 
-        $id   = sanitize_text_field( wp_unslash( $_GET['rb_id'] ) );
-        $type = sanitize_text_field( wp_unslash( $_GET['rb_download'] ) );
+        $id   = sanitize_text_field( wp_unslash( $_GET['sprb_id'] ) );
+        $type = sanitize_text_field( wp_unslash( $_GET['spsprb_download'] ) );
 
         $backup = $this->storage->get_backup( $id );
         if ( ! $backup ) {
@@ -68,8 +68,8 @@ class Remote_Backup_Downloads {
 
     public function download_url( $backup_id, $type ) {
         return wp_nonce_url(
-            admin_url( 'admin.php?page=savedpixel-remote-backup&rb_download=' . urlencode( $type ) . '&rb_id=' . urlencode( $backup_id ) ),
-            'rb_download'
+            admin_url( 'admin.php?page=savedpixel-remote-backup&sprb_download=' . urlencode( $type ) . '&sprb_id=' . urlencode( $backup_id ) ),
+            'spsprb_download'
         );
     }
 }

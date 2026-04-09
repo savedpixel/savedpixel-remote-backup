@@ -15,48 +15,48 @@ class Provider_SSH implements Remote_Provider {
     }
 
     public function get_settings(): array {
-        $path = trim( (string) get_option( 'rb_ssh_path', '' ) );
+        $path = trim( (string) get_option( 'sprb_ssh_path', '' ) );
         if ( '/' !== $path ) {
             $path = rtrim( $path, '/' );
         }
 
         return array(
             'protocol' => 'ssh',
-            'host'     => trim( (string) get_option( 'rb_ssh_host', '' ) ),
-            'port'     => absint( get_option( 'rb_ssh_port', 22 ) ) ?: 22,
-            'username' => trim( (string) get_option( 'rb_ssh_username', '' ) ),
-            'auth'     => get_option( 'rb_ssh_auth_method', 'key' ),
+            'host'     => trim( (string) get_option( 'sprb_ssh_host', '' ) ),
+            'port'     => absint( get_option( 'sprb_ssh_port', 22 ) ) ?: 22,
+            'username' => trim( (string) get_option( 'sprb_ssh_username', '' ) ),
+            'auth'     => get_option( 'sprb_ssh_auth_method', 'key' ),
             'path'     => $path,
-            'key'      => (string) get_option( 'rb_ssh_key', '' ),
-            'password' => (string) get_option( 'rb_ssh_password', '' ),
+            'key'      => (string) get_option( 'sprb_ssh_key', '' ),
+            'password' => (string) get_option( 'sprb_ssh_password', '' ),
         );
     }
 
     public function save_settings_from_request(): void {
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- Called after nonce check in admin.
-        $ssh_host = sanitize_text_field( wp_unslash( $_POST['rb_ssh_host'] ?? get_option( 'rb_ssh_host', '' ) ) );
-        update_option( 'rb_ssh_host', $ssh_host );
+        $ssh_host = sanitize_text_field( wp_unslash( $_POST['sprb_ssh_host'] ?? get_option( 'sprb_ssh_host', '' ) ) );
+        update_option( 'sprb_ssh_host', $ssh_host );
 
-        $ssh_port = absint( $_POST['rb_ssh_port'] ?? get_option( 'rb_ssh_port', 22 ) ) ?: 22;
-        update_option( 'rb_ssh_port', $ssh_port );
+        $ssh_port = absint( $_POST['sprb_ssh_port'] ?? get_option( 'sprb_ssh_port', 22 ) ) ?: 22;
+        update_option( 'sprb_ssh_port', $ssh_port );
 
-        $ssh_username = sanitize_text_field( wp_unslash( $_POST['rb_ssh_username'] ?? get_option( 'rb_ssh_username', '' ) ) );
-        update_option( 'rb_ssh_username', $ssh_username );
+        $ssh_username = sanitize_text_field( wp_unslash( $_POST['sprb_ssh_username'] ?? get_option( 'sprb_ssh_username', '' ) ) );
+        update_option( 'sprb_ssh_username', $ssh_username );
 
-        $ssh_auth = sanitize_text_field( wp_unslash( $_POST['rb_ssh_auth_method'] ?? get_option( 'rb_ssh_auth_method', 'key' ) ) );
+        $ssh_auth = sanitize_text_field( wp_unslash( $_POST['sprb_ssh_auth_method'] ?? get_option( 'sprb_ssh_auth_method', 'key' ) ) );
         if ( ! in_array( $ssh_auth, array( 'key', 'password' ), true ) ) {
             $ssh_auth = 'key';
         }
-        update_option( 'rb_ssh_auth_method', $ssh_auth );
+        update_option( 'sprb_ssh_auth_method', $ssh_auth );
 
-        $ssh_password = (string) wp_unslash( $_POST['rb_ssh_password'] ?? get_option( 'rb_ssh_password', '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Passwords must be stored verbatim.
-        update_option( 'rb_ssh_password', $ssh_password );
+        $ssh_password = (string) wp_unslash( $_POST['sprb_ssh_password'] ?? get_option( 'sprb_ssh_password', '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Passwords must be stored verbatim.
+        update_option( 'sprb_ssh_password', $ssh_password );
 
-        $ssh_key = (string) wp_unslash( $_POST['rb_ssh_key'] ?? get_option( 'rb_ssh_key', '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Private keys must preserve their original formatting.
-        update_option( 'rb_ssh_key', $ssh_key );
+        $ssh_key = (string) wp_unslash( $_POST['sprb_ssh_key'] ?? get_option( 'sprb_ssh_key', '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Private keys must preserve their original formatting.
+        update_option( 'sprb_ssh_key', $ssh_key );
 
-        $ssh_path = sanitize_text_field( wp_unslash( $_POST['rb_ssh_path'] ?? get_option( 'rb_ssh_path', '' ) ) );
-        update_option( 'rb_ssh_path', $ssh_path );
+        $ssh_path = sanitize_text_field( wp_unslash( $_POST['sprb_ssh_path'] ?? get_option( 'sprb_ssh_path', '' ) ) );
+        update_option( 'sprb_ssh_path', $ssh_path );
         // phpcs:enable WordPress.Security.NonceVerification.Missing
     }
 
@@ -144,7 +144,7 @@ class Provider_SSH implements Remote_Provider {
             return $key_check;
         }
 
-        $key_file = tempnam( sys_get_temp_dir(), 'rb_key_' );
+        $key_file = tempnam( sys_get_temp_dir(), 'sprb_key_' );
         if ( false === $key_file ) {
             return new WP_Error( 'key_temp', 'Failed to create a temporary private key file.' );
         }
@@ -208,7 +208,7 @@ class Provider_SSH implements Remote_Provider {
             return $runtime;
         }
 
-        $probe_file = $this->join_remote_path( $settings['path'], '.rb-write-test-' . wp_generate_password( 8, false, false ) );
+        $probe_file = $this->join_remote_path( $settings['path'], '.sprb-write-test-' . wp_generate_password( 8, false, false ) );
         $command    = sprintf(
             'if [ -d %1$s ]; then echo RB_DIR_EXISTS; else mkdir -p %1$s && echo RB_DIR_CREATED || echo RB_DIR_CREATE_FAILED; fi; if touch %2$s 2>/dev/null; then rm -f %2$s && echo RB_WRITE_OK; else echo RB_WRITE_FAILED; fi',
             escapeshellarg( $settings['path'] ),
@@ -258,13 +258,13 @@ class Provider_SSH implements Remote_Provider {
 
     public function render_status_banner(): void {
         if ( $this->ssh_tools_ready() ) : ?>
-            <p id="rb-ssh-tools-status" class="sp-transport-tools-ok description">
+            <p id="sprb-ssh-tools-status" class="sp-transport-tools-ok description">
                 <span class="sp-ok">scp ✓</span> &nbsp;
                 <span class="sp-ok">ssh ✓</span> &nbsp;
                 <span class="<?php echo $this->sshpass_available() ? 'sp-ok' : 'sp-missing'; ?>">sshpass <?php echo $this->sshpass_available() ? '✓' : '✗'; ?></span>
             </p>
         <?php else : ?>
-            <div id="rb-ssh-tools-banner" class="sp-transport-tools-banner">
+            <div id="sprb-ssh-tools-banner" class="sp-transport-tools-banner">
                 <span class="sp-transport-tools-icons">
                     <span class="<?php echo $this->command_available( 'scp' ) ? 'sp-ok' : 'sp-missing'; ?>">scp <?php echo $this->command_available( 'scp' ) ? '✓' : '✗'; ?></span>
                     <span class="<?php echo $this->command_available( 'ssh' ) ? 'sp-ok' : 'sp-missing'; ?>">ssh <?php echo $this->command_available( 'ssh' ) ? '✓' : '✗'; ?></span>
@@ -283,42 +283,42 @@ class Provider_SSH implements Remote_Provider {
         $ssh_password = $saved['password'] ?? '';
         $ssh_path     = $saved['path'] ?? '';
         ?>
-        <tr id="rb-row-ssh-host" class="sp-protocol-ssh">
-            <th><label for="rb_ssh_host">Host</label></th>
-            <td><input type="text" name="rb_ssh_host" id="rb_ssh_host" class="regular-text" value="<?php echo esc_attr( $ssh_host ); ?>" placeholder="backup.example.com"></td>
+        <tr id="sprb-row-ssh-host" class="sp-protocol-ssh">
+            <th><label for="sprb_ssh_host">Host</label></th>
+            <td><input type="text" name="sprb_ssh_host" id="sprb_ssh_host" class="regular-text" value="<?php echo esc_attr( $ssh_host ); ?>" placeholder="backup.example.com"></td>
         </tr>
-        <tr id="rb-row-ssh-port" class="sp-protocol-ssh">
-            <th><label for="rb_ssh_port">Port</label></th>
-            <td><input type="number" name="rb_ssh_port" id="rb_ssh_port" class="small-text" value="<?php echo esc_attr( $ssh_port ); ?>" min="1" max="65535"></td>
+        <tr id="sprb-row-ssh-port" class="sp-protocol-ssh">
+            <th><label for="sprb_ssh_port">Port</label></th>
+            <td><input type="number" name="sprb_ssh_port" id="sprb_ssh_port" class="small-text" value="<?php echo esc_attr( $ssh_port ); ?>" min="1" max="65535"></td>
         </tr>
-        <tr id="rb-row-ssh-username" class="sp-protocol-ssh">
-            <th><label for="rb_ssh_username">Username</label></th>
-            <td><input type="text" name="rb_ssh_username" id="rb_ssh_username" class="regular-text" value="<?php echo esc_attr( $ssh_username ); ?>" placeholder="backups"></td>
+        <tr id="sprb-row-ssh-username" class="sp-protocol-ssh">
+            <th><label for="sprb_ssh_username">Username</label></th>
+            <td><input type="text" name="sprb_ssh_username" id="sprb_ssh_username" class="regular-text" value="<?php echo esc_attr( $ssh_username ); ?>" placeholder="backups"></td>
         </tr>
-        <tr id="rb-row-ssh-path" class="sp-protocol-ssh">
-            <th><label for="rb_ssh_path">Remote Path</label></th>
-            <td><input type="text" name="rb_ssh_path" id="rb_ssh_path" class="regular-text" value="<?php echo esc_attr( $ssh_path ); ?>" placeholder="/home/backups/example-site"></td>
+        <tr id="sprb-row-ssh-path" class="sp-protocol-ssh">
+            <th><label for="sprb_ssh_path">Remote Path</label></th>
+            <td><input type="text" name="sprb_ssh_path" id="sprb_ssh_path" class="regular-text" value="<?php echo esc_attr( $ssh_path ); ?>" placeholder="/home/backups/example-site"></td>
         </tr>
-        <tr id="rb-row-ssh-auth" class="sp-protocol-ssh">
-            <th><label for="rb_ssh_auth_method">Auth Method</label></th>
+        <tr id="sprb-row-ssh-auth" class="sp-protocol-ssh">
+            <th><label for="sprb_ssh_auth_method">Auth Method</label></th>
             <td>
-                <select name="rb_ssh_auth_method" id="rb_ssh_auth_method">
+                <select name="sprb_ssh_auth_method" id="sprb_ssh_auth_method">
                     <option value="key" <?php selected( $ssh_auth, 'key' ); ?>>SSH Private Key</option>
                     <option value="password" <?php selected( $ssh_auth, 'password' ); ?>>Password</option>
                 </select>
             </td>
         </tr>
-        <tr id="rb-row-ssh-key" class="sp-protocol-ssh sp-auth-key" <?php echo 'key' !== $ssh_auth ? 'style="display:none;"' : ''; ?>>
-            <th><label for="rb_ssh_key">Private Key</label></th>
+        <tr id="sprb-row-ssh-key" class="sp-protocol-ssh sp-auth-key" <?php echo 'key' !== $ssh_auth ? 'style="display:none;"' : ''; ?>>
+            <th><label for="sprb_ssh_key">Private Key</label></th>
             <td>
-                <textarea name="rb_ssh_key" id="rb_ssh_key" rows="5" class="large-text code" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;…&#10;-----END OPENSSH PRIVATE KEY-----"><?php echo esc_textarea( $ssh_key ); ?></textarea>
+                <textarea name="sprb_ssh_key" id="sprb_ssh_key" rows="5" class="large-text code" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;…&#10;-----END OPENSSH PRIVATE KEY-----"><?php echo esc_textarea( $ssh_key ); ?></textarea>
                 <p class="description">Paste the full unencrypted private key including header/footer lines. Public keys and passphrase-protected keys are not supported.</p>
             </td>
         </tr>
-        <tr id="rb-row-ssh-password" class="sp-protocol-ssh sp-auth-password" <?php echo 'password' !== $ssh_auth ? 'style="display:none;"' : ''; ?>>
-            <th><label for="rb_ssh_password">Password</label></th>
+        <tr id="sprb-row-ssh-password" class="sp-protocol-ssh sp-auth-password" <?php echo 'password' !== $ssh_auth ? 'style="display:none;"' : ''; ?>>
+            <th><label for="sprb_ssh_password">Password</label></th>
             <td>
-                <input type="password" name="rb_ssh_password" id="rb_ssh_password" class="regular-text" value="<?php echo esc_attr( $ssh_password ); ?>" autocomplete="off">
+                <input type="password" name="sprb_ssh_password" id="sprb_ssh_password" class="regular-text" value="<?php echo esc_attr( $ssh_password ); ?>" autocomplete="off">
                 <p class="description">Requires <code>sshpass</code> installed on the server.</p>
             </td>
         </tr>

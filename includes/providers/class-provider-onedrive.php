@@ -5,8 +5,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Provider_OneDrive implements Remote_Provider {
 
-    private const TOKEN_OPTION        = 'rb_onedrive_tokens';
-    private const FOLDER_OPTION       = 'rb_onedrive_folder_id';
+    private const TOKEN_OPTION        = 'sprb_onedrive_tokens';
+    private const FOLDER_OPTION       = 'sprb_onedrive_folder_id';
     private const CHUNK_SIZE          = 5 * 1024 * 1024; // 5 MB
     private const TOKEN_URL           = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
     private const AUTH_URL            = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize';
@@ -180,48 +180,48 @@ class Provider_OneDrive implements Remote_Provider {
         $is_connected  = ! empty( $tokens['refresh_token'] );
         $auth_url      = $this->build_manual_auth_url( $client_id );
         ?>
-        <tr id="rb-row-onedrive-auth" class="sp-protocol-onedrive">
-            <td id="rb-onedrive-auth-cell" colspan="2">
+        <tr id="sprb-row-onedrive-auth" class="sp-protocol-onedrive">
+            <td id="sprb-onedrive-auth-cell" colspan="2">
                 <?php if ( $is_connected ) : ?>
-                    <span id="rb-onedrive-status" class="sp-ok">✓ Connected</span>
-                    <button type="button" id="rb-onedrive-disconnect" class="button">Disconnect</button>
+                    <span id="sprb-onedrive-status" class="sp-ok">✓ Connected</span>
+                    <button type="button" id="sprb-onedrive-disconnect" class="button">Disconnect</button>
                 <?php else : ?>
-                    <button type="button" id="rb-onedrive-auth-btn" class="button button-primary rb-auth-open" data-auth-url="<?php echo esc_url( $auth_url ); ?>" data-provider="onedrive">Authorize</button>
+                    <button type="button" id="sprb-onedrive-auth-btn" class="button button-primary sprb-auth-open" data-auth-url="<?php echo esc_url( $auth_url ); ?>" data-provider="onedrive">Authorize</button>
                 <?php endif; ?>
             </td>
         </tr>
         <?php if ( $is_connected ) : ?>
-        <tr id="rb-row-onedrive-folder" class="sp-protocol-onedrive">
-            <td id="rb-onedrive-folder-cell" colspan="2">
-                <label id="rb-label-onedrive-folder" class="sp-form-label" for="rb_onedrive_folder_name">Folder Name</label>
-                <input type="text" name="rb_onedrive_folder_name" id="rb_onedrive_folder_name" class="sp-input" value="<?php echo esc_attr( $folder_name ); ?>" placeholder="SavedPixel Backups" style="width:100%;">
+        <tr id="sprb-row-onedrive-folder" class="sp-protocol-onedrive">
+            <td id="sprb-onedrive-folder-cell" colspan="2">
+                <label id="sprb-label-onedrive-folder" class="sp-form-label" for="sprb_onedrive_folder_name">Folder Name</label>
+                <input type="text" name="sprb_onedrive_folder_name" id="sprb_onedrive_folder_name" class="sp-input" value="<?php echo esc_attr( $folder_name ); ?>" placeholder="SavedPixel Backups" style="width:100%;">
             </td>
         </tr>
         <?php endif; ?>
-        <input type="hidden" name="rb_onedrive_client_id" id="rb_onedrive_client_id" value="<?php echo esc_attr( $client_id ); ?>">
-        <input type="hidden" name="rb_onedrive_client_secret" id="rb_onedrive_client_secret" value="<?php echo esc_attr( $client_secret ); ?>">
+        <input type="hidden" name="sprb_onedrive_client_id" id="sprb_onedrive_client_id" value="<?php echo esc_attr( $client_id ); ?>">
+        <input type="hidden" name="sprb_onedrive_client_secret" id="sprb_onedrive_client_secret" value="<?php echo esc_attr( $client_secret ); ?>">
         <?php
     }
 
     public function get_settings(): array {
         return array(
-            'client_id'     => get_option( 'rb_onedrive_client_id', '' ),
-            'client_secret' => get_option( 'rb_onedrive_client_secret', '' ),
-            'folder_name'   => get_option( 'rb_onedrive_folder_name', 'SavedPixel Backups' ),
+            'client_id'     => get_option( 'sprb_onedrive_client_id', '' ),
+            'client_secret' => get_option( 'sprb_onedrive_client_secret', '' ),
+            'folder_name'   => get_option( 'sprb_onedrive_folder_name', 'SavedPixel Backups' ),
             'tokens'        => get_option( self::TOKEN_OPTION, array() ),
         );
     }
 
     public function save_settings_from_request(): void {
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- Called after check_admin_referer( 'rb_remote' ).
-        $client_id = sanitize_text_field( wp_unslash( $_POST['rb_onedrive_client_id'] ?? get_option( 'rb_onedrive_client_id', '' ) ) );
-        update_option( 'rb_onedrive_client_id', $client_id );
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- Called after check_admin_referer( 'sprb_remote' ).
+        $client_id = sanitize_text_field( wp_unslash( $_POST['sprb_onedrive_client_id'] ?? get_option( 'sprb_onedrive_client_id', '' ) ) );
+        update_option( 'sprb_onedrive_client_id', $client_id );
 
-        $client_secret = sanitize_text_field( wp_unslash( $_POST['rb_onedrive_client_secret'] ?? get_option( 'rb_onedrive_client_secret', '' ) ) );
-        update_option( 'rb_onedrive_client_secret', $client_secret );
+        $client_secret = sanitize_text_field( wp_unslash( $_POST['sprb_onedrive_client_secret'] ?? get_option( 'sprb_onedrive_client_secret', '' ) ) );
+        update_option( 'sprb_onedrive_client_secret', $client_secret );
 
-        $folder_name = sanitize_text_field( wp_unslash( $_POST['rb_onedrive_folder_name'] ?? get_option( 'rb_onedrive_folder_name', 'SavedPixel Backups' ) ) );
-        update_option( 'rb_onedrive_folder_name', $folder_name );
+        $folder_name = sanitize_text_field( wp_unslash( $_POST['sprb_onedrive_folder_name'] ?? get_option( 'sprb_onedrive_folder_name', 'SavedPixel Backups' ) ) );
+        update_option( 'sprb_onedrive_folder_name', $folder_name );
         // phpcs:enable WordPress.Security.NonceVerification.Missing
     }
 
@@ -240,9 +240,9 @@ class Provider_OneDrive implements Remote_Provider {
     public function render_status_banner(): void {
         $tokens = get_option( self::TOKEN_OPTION, array() );
         if ( ! empty( $tokens['refresh_token'] ) ) {
-            echo '<div id="rb-onedrive-banner-ok" class="sp-notice sp-notice--success"><strong>OneDrive</strong> is connected.</div>';
+            echo '<div id="sprb-onedrive-banner-ok" class="sp-notice sp-notice--success"><strong>OneDrive</strong> is connected.</div>';
         } else {
-            echo '<div id="rb-onedrive-banner-missing" class="sp-notice sp-notice--error"><strong>OneDrive</strong> is not authorized.</div>';
+            echo '<div id="sprb-onedrive-banner-missing" class="sp-notice sp-notice--error"><strong>OneDrive</strong> is not authorized.</div>';
         }
     }
 
@@ -267,13 +267,13 @@ class Provider_OneDrive implements Remote_Provider {
             'response_type' => 'code',
             'scope'         => 'Files.ReadWrite offline_access',
             'response_mode' => 'query',
-            'state'         => wp_create_nonce( 'rb_onedrive_oauth' ),
+            'state'         => wp_create_nonce( 'sprb_onedrive_oauth' ),
         ), self::AUTH_URL );
     }
 
     public function exchange_code( string $code, string $redirect_uri = '' ): array|WP_Error {
-        $client_id     = get_option( 'rb_onedrive_client_id', '' );
-        $client_secret = get_option( 'rb_onedrive_client_secret', '' );
+        $client_id     = get_option( 'sprb_onedrive_client_id', '' );
+        $client_secret = get_option( 'sprb_onedrive_client_secret', '' );
         if ( '' === $redirect_uri ) {
             $redirect_uri = admin_url( 'admin.php?page=savedpixel-remote-backup' );
         }

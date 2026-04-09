@@ -5,8 +5,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Provider_Google_Drive implements Remote_Provider {
 
-    private const TOKEN_OPTION        = 'rb_google_drive_tokens';
-    private const FOLDER_OPTION       = 'rb_gdrive_folder_id';
+    private const TOKEN_OPTION        = 'sprb_google_drive_tokens';
+    private const FOLDER_OPTION       = 'sprb_gdrive_folder_id';
     private const CHUNK_SIZE          = 5 * 1024 * 1024; // 5 MB
     private const TOKEN_URL           = 'https://oauth2.googleapis.com/token';
     private const AUTH_URL            = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -187,51 +187,51 @@ class Provider_Google_Drive implements Remote_Provider {
         $using_defaults = ( $client_id === self::DEFAULT_CLIENT_ID );
         $auth_url       = $this->build_manual_auth_url( $client_id );
         ?>
-        <tr id="rb-row-gdrive-auth" class="sp-protocol-google_drive">
-            <td id="rb-gdrive-auth-cell" colspan="2">
+        <tr id="sprb-row-gdrive-auth" class="sp-protocol-google_drive">
+            <td id="sprb-gdrive-auth-cell" colspan="2">
                 <?php if ( $is_connected ) : ?>
-                    <span id="rb-gdrive-status" class="sp-ok">✓ Connected</span>
-                    <button type="button" id="rb-gdrive-disconnect" class="button">Disconnect</button>
+                    <span id="sprb-gdrive-status" class="sp-ok">✓ Connected</span>
+                    <button type="button" id="sprb-gdrive-disconnect" class="button">Disconnect</button>
                 <?php else : ?>
-                    <button type="button" id="rb-gdrive-auth-btn" class="button button-primary rb-auth-open" data-auth-url="<?php echo esc_url( $auth_url ); ?>" data-provider="gdrive">Authorize</button>
+                    <button type="button" id="sprb-gdrive-auth-btn" class="button button-primary sprb-auth-open" data-auth-url="<?php echo esc_url( $auth_url ); ?>" data-provider="gdrive">Authorize</button>
                 <?php endif; ?>
             </td>
         </tr>
         <?php if ( $is_connected ) : ?>
-        <tr id="rb-row-gdrive-folder" class="sp-protocol-google_drive">
-            <td id="rb-gdrive-folder-cell" colspan="2">
-                <label id="rb-label-gdrive-folder" class="sp-form-label" for="rb_gdrive_folder_name">Folder Name</label>
-                <input type="text" name="rb_gdrive_folder_name" id="rb_gdrive_folder_name" class="sp-input" value="<?php echo esc_attr( $folder_name ); ?>" placeholder="SavedPixel Backups" style="width:100%;">
+        <tr id="sprb-row-gdrive-folder" class="sp-protocol-google_drive">
+            <td id="sprb-gdrive-folder-cell" colspan="2">
+                <label id="sprb-label-gdrive-folder" class="sp-form-label" for="sprb_gdrive_folder_name">Folder Name</label>
+                <input type="text" name="sprb_gdrive_folder_name" id="sprb_gdrive_folder_name" class="sp-input" value="<?php echo esc_attr( $folder_name ); ?>" placeholder="SavedPixel Backups" style="width:100%;">
             </td>
         </tr>
         <?php endif; ?>
-        <input type="hidden" name="rb_gdrive_client_id" id="rb_gdrive_client_id" value="<?php echo esc_attr( $using_defaults ? '' : $client_id ); ?>">
-        <input type="hidden" name="rb_gdrive_client_secret" id="rb_gdrive_client_secret" value="<?php echo esc_attr( $using_defaults ? '' : $client_secret ); ?>">
+        <input type="hidden" name="sprb_gdrive_client_id" id="sprb_gdrive_client_id" value="<?php echo esc_attr( $using_defaults ? '' : $client_id ); ?>">
+        <input type="hidden" name="sprb_gdrive_client_secret" id="sprb_gdrive_client_secret" value="<?php echo esc_attr( $using_defaults ? '' : $client_secret ); ?>">
         <?php
     }
 
     public function get_settings(): array {
-        $client_id     = get_option( 'rb_gdrive_client_id', '' );
-        $client_secret = get_option( 'rb_gdrive_client_secret', '' );
+        $client_id     = get_option( 'sprb_gdrive_client_id', '' );
+        $client_secret = get_option( 'sprb_gdrive_client_secret', '' );
 
         return array(
             'client_id'     => '' !== $client_id ? $client_id : self::DEFAULT_CLIENT_ID,
             'client_secret' => '' !== $client_secret ? $client_secret : self::DEFAULT_CLIENT_SECRET,
-            'folder_name'   => get_option( 'rb_gdrive_folder_name', 'SavedPixel Backups' ),
+            'folder_name'   => get_option( 'sprb_gdrive_folder_name', 'SavedPixel Backups' ),
             'tokens'        => get_option( self::TOKEN_OPTION, array() ),
         );
     }
 
     public function save_settings_from_request(): void {
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- Called after check_admin_referer( 'rb_remote' ).
-        $client_id = sanitize_text_field( wp_unslash( $_POST['rb_gdrive_client_id'] ?? get_option( 'rb_gdrive_client_id', '' ) ) );
-        update_option( 'rb_gdrive_client_id', $client_id );
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- Called after check_admin_referer( 'sprb_remote' ).
+        $client_id = sanitize_text_field( wp_unslash( $_POST['sprb_gdrive_client_id'] ?? get_option( 'sprb_gdrive_client_id', '' ) ) );
+        update_option( 'sprb_gdrive_client_id', $client_id );
 
-        $client_secret = sanitize_text_field( wp_unslash( $_POST['rb_gdrive_client_secret'] ?? get_option( 'rb_gdrive_client_secret', '' ) ) );
-        update_option( 'rb_gdrive_client_secret', $client_secret );
+        $client_secret = sanitize_text_field( wp_unslash( $_POST['sprb_gdrive_client_secret'] ?? get_option( 'sprb_gdrive_client_secret', '' ) ) );
+        update_option( 'sprb_gdrive_client_secret', $client_secret );
 
-        $folder_name = sanitize_text_field( wp_unslash( $_POST['rb_gdrive_folder_name'] ?? get_option( 'rb_gdrive_folder_name', 'SavedPixel Backups' ) ) );
-        update_option( 'rb_gdrive_folder_name', $folder_name );
+        $folder_name = sanitize_text_field( wp_unslash( $_POST['sprb_gdrive_folder_name'] ?? get_option( 'sprb_gdrive_folder_name', 'SavedPixel Backups' ) ) );
+        update_option( 'sprb_gdrive_folder_name', $folder_name );
         // phpcs:enable WordPress.Security.NonceVerification.Missing
     }
 
@@ -250,9 +250,9 @@ class Provider_Google_Drive implements Remote_Provider {
     public function render_status_banner(): void {
         $tokens = get_option( self::TOKEN_OPTION, array() );
         if ( ! empty( $tokens['refresh_token'] ) ) {
-            echo '<div id="rb-gdrive-banner-ok" class="sp-notice sp-notice--success"><strong>Google Drive</strong> is connected.</div>';
+            echo '<div id="sprb-gdrive-banner-ok" class="sp-notice sp-notice--success"><strong>Google Drive</strong> is connected.</div>';
         } else {
-            echo '<div id="rb-gdrive-banner-missing" class="sp-notice sp-notice--error"><strong>Google Drive</strong> is not authorized.</div>';
+            echo '<div id="sprb-gdrive-banner-missing" class="sp-notice sp-notice--error"><strong>Google Drive</strong> is not authorized.</div>';
         }
     }
 
@@ -285,7 +285,7 @@ class Provider_Google_Drive implements Remote_Provider {
             'scope'         => 'https://www.googleapis.com/auth/drive.file',
             'access_type'   => 'offline',
             'prompt'        => 'consent',
-            'state'         => wp_create_nonce( 'rb_gdrive_oauth' ),
+            'state'         => wp_create_nonce( 'sprb_gdrive_oauth' ),
         ), self::AUTH_URL );
     }
 
@@ -293,8 +293,8 @@ class Provider_Google_Drive implements Remote_Provider {
      * Exchange an authorization code for tokens.
      */
     public function exchange_code( string $code, string $redirect_uri = '' ): array|WP_Error {
-        $client_id     = get_option( 'rb_gdrive_client_id', '' );
-        $client_secret = get_option( 'rb_gdrive_client_secret', '' );
+        $client_id     = get_option( 'sprb_gdrive_client_id', '' );
+        $client_secret = get_option( 'sprb_gdrive_client_secret', '' );
         if ( '' === $redirect_uri ) {
             $redirect_uri = admin_url( 'admin.php?page=savedpixel-remote-backup' );
         }

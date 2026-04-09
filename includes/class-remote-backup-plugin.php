@@ -26,19 +26,19 @@ class Remote_Backup_Plugin {
     }
 
     private function load_modules() {
-        require_once RB_PLUGIN_DIR . 'includes/class-remote-backup-logger.php';
-        require_once RB_PLUGIN_DIR . 'includes/class-remote-backup-storage.php';
-        require_once RB_PLUGIN_DIR . 'includes/class-remote-backup-runner.php';
-        require_once RB_PLUGIN_DIR . 'includes/class-remote-backup-downloads.php';
-        require_once RB_PLUGIN_DIR . 'includes/class-remote-backup-scheduler.php';
-        require_once RB_PLUGIN_DIR . 'includes/class-remote-backup-api.php';
-        require_once RB_PLUGIN_DIR . 'includes/class-remote-backup-admin.php';
-        require_once RB_PLUGIN_DIR . 'includes/providers/interface-remote-provider.php';
-        require_once RB_PLUGIN_DIR . 'includes/providers/class-provider-ssh.php';
-        require_once RB_PLUGIN_DIR . 'includes/providers/class-provider-ftp.php';
-        require_once RB_PLUGIN_DIR . 'includes/providers/class-provider-google-drive.php';
-        require_once RB_PLUGIN_DIR . 'includes/providers/class-provider-onedrive.php';
-        require_once RB_PLUGIN_DIR . 'includes/providers/class-provider-dropbox.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/class-remote-backup-logger.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/class-remote-backup-storage.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/class-remote-backup-runner.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/class-remote-backup-downloads.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/class-remote-backup-scheduler.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/class-remote-backup-api.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/class-remote-backup-admin.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/providers/interface-remote-provider.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/providers/class-provider-ssh.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/providers/class-provider-ftp.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/providers/class-provider-google-drive.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/providers/class-provider-onedrive.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/providers/class-provider-dropbox.php';
 
         $this->logger    = new Remote_Backup_Logger();
         $this->storage   = new Remote_Backup_Storage();
@@ -57,7 +57,7 @@ class Remote_Backup_Plugin {
     }
 
     public static function activate() {
-        require_once RB_PLUGIN_DIR . 'includes/class-remote-backup-storage.php';
+        require_once SPRB_PLUGIN_DIR . 'includes/class-remote-backup-storage.php';
         $storage = new Remote_Backup_Storage();
         $storage->ensure_directories();
     }

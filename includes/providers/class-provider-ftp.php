@@ -15,41 +15,41 @@ class Provider_FTP implements Remote_Provider {
     }
 
     public function get_settings(): array {
-        $path = trim( (string) get_option( 'rb_ftp_path', '' ) );
+        $path = trim( (string) get_option( 'sprb_ftp_path', '' ) );
         if ( '/' !== $path ) {
             $path = rtrim( $path, '/' );
         }
 
         return array(
             'protocol' => 'ftp',
-            'host'     => trim( (string) get_option( 'rb_ftp_host', '' ) ),
-            'port'     => absint( get_option( 'rb_ftp_port', 21 ) ) ?: 21,
-            'username' => trim( (string) get_option( 'rb_ftp_username', '' ) ),
-            'password' => (string) get_option( 'rb_ftp_password', '' ),
+            'host'     => trim( (string) get_option( 'sprb_ftp_host', '' ) ),
+            'port'     => absint( get_option( 'sprb_ftp_port', 21 ) ) ?: 21,
+            'username' => trim( (string) get_option( 'sprb_ftp_username', '' ) ),
+            'password' => (string) get_option( 'sprb_ftp_password', '' ),
             'path'     => $path,
-            'passive'  => (bool) get_option( 'rb_ftp_passive', 1 ),
+            'passive'  => (bool) get_option( 'sprb_ftp_passive', 1 ),
             'auth'     => 'password',
         );
     }
 
     public function save_settings_from_request(): void {
         // phpcs:disable WordPress.Security.NonceVerification.Missing -- Called after nonce check in admin.
-        $ftp_host = sanitize_text_field( wp_unslash( $_POST['rb_ftp_host'] ?? get_option( 'rb_ftp_host', '' ) ) );
-        update_option( 'rb_ftp_host', $ftp_host );
+        $ftp_host = sanitize_text_field( wp_unslash( $_POST['sprb_ftp_host'] ?? get_option( 'sprb_ftp_host', '' ) ) );
+        update_option( 'sprb_ftp_host', $ftp_host );
 
-        $ftp_port = absint( $_POST['rb_ftp_port'] ?? get_option( 'rb_ftp_port', 21 ) ) ?: 21;
-        update_option( 'rb_ftp_port', $ftp_port );
+        $ftp_port = absint( $_POST['sprb_ftp_port'] ?? get_option( 'sprb_ftp_port', 21 ) ) ?: 21;
+        update_option( 'sprb_ftp_port', $ftp_port );
 
-        $ftp_username = sanitize_text_field( wp_unslash( $_POST['rb_ftp_username'] ?? get_option( 'rb_ftp_username', '' ) ) );
-        update_option( 'rb_ftp_username', $ftp_username );
+        $ftp_username = sanitize_text_field( wp_unslash( $_POST['sprb_ftp_username'] ?? get_option( 'sprb_ftp_username', '' ) ) );
+        update_option( 'sprb_ftp_username', $ftp_username );
 
-        $ftp_password = (string) wp_unslash( $_POST['rb_ftp_password'] ?? get_option( 'rb_ftp_password', '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Passwords must be stored verbatim.
-        update_option( 'rb_ftp_password', $ftp_password );
+        $ftp_password = (string) wp_unslash( $_POST['sprb_ftp_password'] ?? get_option( 'sprb_ftp_password', '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Passwords must be stored verbatim.
+        update_option( 'sprb_ftp_password', $ftp_password );
 
-        $ftp_path = sanitize_text_field( wp_unslash( $_POST['rb_ftp_path'] ?? get_option( 'rb_ftp_path', '' ) ) );
-        update_option( 'rb_ftp_path', $ftp_path );
+        $ftp_path = sanitize_text_field( wp_unslash( $_POST['sprb_ftp_path'] ?? get_option( 'sprb_ftp_path', '' ) ) );
+        update_option( 'sprb_ftp_path', $ftp_path );
 
-        update_option( 'rb_ftp_passive', isset( $_POST['rb_ftp_passive'] ) ? 1 : 0 );
+        update_option( 'sprb_ftp_passive', isset( $_POST['sprb_ftp_passive'] ) ? 1 : 0 );
         // phpcs:enable WordPress.Security.NonceVerification.Missing
     }
 
@@ -199,7 +199,7 @@ class Provider_FTP implements Remote_Provider {
             return $directory;
         }
 
-        $probe_local = tempnam( sys_get_temp_dir(), 'rb_ftp_test_' );
+        $probe_local = tempnam( sys_get_temp_dir(), 'sprb_ftp_test_' );
         if ( false === $probe_local ) {
             $this->cleanup( $runtime );
             return new WP_Error( 'ftp_probe_temp', 'Connected to FTP, but could not create a local test file.' );
@@ -211,7 +211,7 @@ class Provider_FTP implements Remote_Provider {
             return new WP_Error( 'ftp_probe_write', 'Connected to FTP, but could not write the local test file.' );
         }
 
-        $probe_remote = $this->join_remote_path( $settings['path'], '.rb-write-test-' . wp_generate_password( 8, false, false ) );
+        $probe_remote = $this->join_remote_path( $settings['path'], '.sprb-write-test-' . wp_generate_password( 8, false, false ) );
         $warning      = '';
         $uploaded     = $this->call_with_warning_capture(
             static function() use ( $ftp, $probe_local, $probe_remote ) {
@@ -255,11 +255,11 @@ class Provider_FTP implements Remote_Provider {
     public function render_status_banner(): void {
         $ftp_available = function_exists( 'ftp_connect' );
         if ( $ftp_available ) : ?>
-            <p id="rb-ftp-tools-status" class="sp-transport-tools-ok description">
+            <p id="sprb-ftp-tools-status" class="sp-transport-tools-ok description">
                 <span class="sp-ok">PHP FTP extension ✓</span>
             </p>
         <?php else : ?>
-            <div id="rb-ftp-tools-banner" class="sp-transport-tools-banner">
+            <div id="sprb-ftp-tools-banner" class="sp-transport-tools-banner">
                 <span class="sp-transport-tools-icons">
                     <span class="sp-missing">PHP FTP extension ✗</span>
                 </span>
@@ -275,34 +275,34 @@ class Provider_FTP implements Remote_Provider {
         $ftp_path     = $saved['path'] ?? '';
         $ftp_passive  = (bool) ( $saved['passive'] ?? true );
         ?>
-        <tr id="rb-row-ftp-host" class="sp-protocol-ftp">
-            <th><label for="rb_ftp_host">Host</label></th>
-            <td><input type="text" name="rb_ftp_host" id="rb_ftp_host" class="regular-text" value="<?php echo esc_attr( $ftp_host ); ?>" placeholder="ftp.example.com"></td>
+        <tr id="sprb-row-ftp-host" class="sp-protocol-ftp">
+            <th><label for="sprb_ftp_host">Host</label></th>
+            <td><input type="text" name="sprb_ftp_host" id="sprb_ftp_host" class="regular-text" value="<?php echo esc_attr( $ftp_host ); ?>" placeholder="ftp.example.com"></td>
         </tr>
-        <tr id="rb-row-ftp-port" class="sp-protocol-ftp">
-            <th><label for="rb_ftp_port">Port</label></th>
-            <td><input type="number" name="rb_ftp_port" id="rb_ftp_port" class="small-text" value="<?php echo esc_attr( $ftp_port ); ?>" min="1" max="65535"></td>
+        <tr id="sprb-row-ftp-port" class="sp-protocol-ftp">
+            <th><label for="sprb_ftp_port">Port</label></th>
+            <td><input type="number" name="sprb_ftp_port" id="sprb_ftp_port" class="small-text" value="<?php echo esc_attr( $ftp_port ); ?>" min="1" max="65535"></td>
         </tr>
-        <tr id="rb-row-ftp-username" class="sp-protocol-ftp">
-            <th><label for="rb_ftp_username">Username</label></th>
-            <td><input type="text" name="rb_ftp_username" id="rb_ftp_username" class="regular-text" value="<?php echo esc_attr( $ftp_username ); ?>" placeholder="backups"></td>
+        <tr id="sprb-row-ftp-username" class="sp-protocol-ftp">
+            <th><label for="sprb_ftp_username">Username</label></th>
+            <td><input type="text" name="sprb_ftp_username" id="sprb_ftp_username" class="regular-text" value="<?php echo esc_attr( $ftp_username ); ?>" placeholder="backups"></td>
         </tr>
-        <tr id="rb-row-ftp-password" class="sp-protocol-ftp">
-            <th><label for="rb_ftp_password">Password</label></th>
-            <td><input type="password" name="rb_ftp_password" id="rb_ftp_password" class="regular-text" value="<?php echo esc_attr( $ftp_password ); ?>" autocomplete="off"></td>
+        <tr id="sprb-row-ftp-password" class="sp-protocol-ftp">
+            <th><label for="sprb_ftp_password">Password</label></th>
+            <td><input type="password" name="sprb_ftp_password" id="sprb_ftp_password" class="regular-text" value="<?php echo esc_attr( $ftp_password ); ?>" autocomplete="off"></td>
         </tr>
-        <tr id="rb-row-ftp-path" class="sp-protocol-ftp">
-            <th><label for="rb_ftp_path">Remote Path</label></th>
+        <tr id="sprb-row-ftp-path" class="sp-protocol-ftp">
+            <th><label for="sprb_ftp_path">Remote Path</label></th>
             <td>
-                <input type="text" name="rb_ftp_path" id="rb_ftp_path" class="regular-text" value="<?php echo esc_attr( $ftp_path ); ?>" placeholder="/backups or /home/backups/example-site">
+                <input type="text" name="sprb_ftp_path" id="sprb_ftp_path" class="regular-text" value="<?php echo esc_attr( $ftp_path ); ?>" placeholder="/backups or /home/backups/example-site">
                 <p class="description">Use a path the FTP user can access. Some FTP servers expect a path relative to the FTP root.</p>
             </td>
         </tr>
-        <tr id="rb-row-ftp-passive" class="sp-protocol-ftp">
+        <tr id="sprb-row-ftp-passive" class="sp-protocol-ftp">
             <th>Transfer Mode</th>
             <td>
-                <label class="sp-checkbox-row" for="rb_ftp_passive">
-                    <input type="checkbox" name="rb_ftp_passive" id="rb_ftp_passive" value="1" <?php checked( $ftp_passive ); ?>>
+                <label class="sp-checkbox-row" for="sprb_ftp_passive">
+                    <input type="checkbox" name="sprb_ftp_passive" id="sprb_ftp_passive" value="1" <?php checked( $ftp_passive ); ?>>
                     Use passive mode
                 </label>
             </td>

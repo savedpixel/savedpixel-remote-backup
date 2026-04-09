@@ -12,9 +12,9 @@ class Remote_Backup_Storage {
 
     public function ensure_directories() {
         $dirs = array(
-            RB_BASE_DIR,
-            RB_STORAGE_DIR,
-            RB_DATA_DIR,
+            SPRB_BASE_DIR,
+            SPRB_STORAGE_DIR,
+            SPRB_DATA_DIR,
         );
         foreach ( $dirs as $dir ) {
             if ( ! is_dir( $dir ) ) {
@@ -23,7 +23,7 @@ class Remote_Backup_Storage {
         }
 
         // Protect backup data and storage roots from direct web access.
-        foreach ( array( RB_BASE_DIR, RB_STORAGE_DIR ) as $protected_dir ) {
+        foreach ( array( SPRB_BASE_DIR, SPRB_STORAGE_DIR ) as $protected_dir ) {
             $htaccess = trailingslashit( $protected_dir ) . '.htaccess';
             if ( ! file_exists( $htaccess ) ) {
                 file_put_contents( $htaccess, "Order deny,allow\nDeny from all\n" );
@@ -43,13 +43,13 @@ class Remote_Backup_Storage {
     }
 
     public function is_writable() {
-        return is_dir( RB_STORAGE_DIR ) && wp_is_writable( RB_STORAGE_DIR );
+        return is_dir( SPRB_STORAGE_DIR ) && wp_is_writable( SPRB_STORAGE_DIR );
     }
 
     /* ── Manifest helpers ─────────────────────────────── */
 
     private function manifest_path() {
-        return RB_DATA_DIR . 'backups.json';
+        return SPRB_DATA_DIR . 'backups.json';
     }
 
     public function get_backups() {
@@ -161,7 +161,7 @@ class Remote_Backup_Storage {
     }
 
     public function artifact_path( $filename ) {
-        return RB_STORAGE_DIR . $filename;
+        return SPRB_STORAGE_DIR . $filename;
     }
 
     public function resolve_storage_path( $path ) {
@@ -174,18 +174,18 @@ class Remote_Backup_Storage {
             }
         }
 
-        return RB_STORAGE_DIR . $path;
+        return SPRB_STORAGE_DIR . $path;
     }
 
     public function stream_file( $filepath, $chunk_size = 1048576 ) {
         $filepath = (string) $filepath;
 
         if ( ! file_exists( $filepath ) ) {
-            return new WP_Error( 'rb_stream_missing', 'Backup file not found on disk.' );
+            return new WP_Error( 'sprb_stream_missing', 'Backup file not found on disk.' );
         }
 
         if ( ! is_readable( $filepath ) ) {
-            return new WP_Error( 'rb_stream_unreadable', 'Backup file is not readable.' );
+            return new WP_Error( 'sprb_stream_unreadable', 'Backup file is not readable.' );
         }
 
         if ( function_exists( 'ignore_user_abort' ) ) {
@@ -202,7 +202,7 @@ class Remote_Backup_Storage {
 
         $handle = fopen( $filepath, 'rb' );
         if ( ! $handle ) {
-            return new WP_Error( 'rb_stream_open', 'Backup file could not be opened for download.' );
+            return new WP_Error( 'sprb_stream_open', 'Backup file could not be opened for download.' );
         }
 
         $chunk_size = max( 8192, (int) $chunk_size );
@@ -212,7 +212,7 @@ class Remote_Backup_Storage {
 
             if ( false === $buffer ) {
                 fclose( $handle );
-                return new WP_Error( 'rb_stream_read', 'Backup file could not be read during download.' );
+                return new WP_Error( 'sprb_stream_read', 'Backup file could not be read during download.' );
             }
 
             if ( '' === $buffer ) {
@@ -325,7 +325,7 @@ class Remote_Backup_Storage {
     }
 
     private function remote_pull_primary_site_dir_path( $url ) {
-        return trailingslashit( RB_STORAGE_DIR . $this->remote_pull_site_slug( $url ) );
+        return trailingslashit( SPRB_STORAGE_DIR . $this->remote_pull_site_slug( $url ) );
     }
 
     private function remote_pull_legacy_site_dir_paths( $url ) {
@@ -602,7 +602,7 @@ class Remote_Backup_Storage {
     }
 
     private function storage_roots() {
-        $roots  = array( trailingslashit( wp_normalize_path( RB_STORAGE_DIR ) ) );
+        $roots  = array( trailingslashit( wp_normalize_path( SPRB_STORAGE_DIR ) ) );
         $legacy = trailingslashit( wp_normalize_path( $this->legacy_storage_root() ) );
 
         if ( $legacy !== $roots[0] ) {
@@ -613,7 +613,7 @@ class Remote_Backup_Storage {
     }
 
     private function legacy_storage_root() {
-        return trailingslashit( RB_BASE_DIR . 'storage/' );
+        return trailingslashit( SPRB_BASE_DIR . 'storage/' );
     }
 
     private function backup_id_from_manifest_path( $manifest_path ) {

@@ -46,9 +46,9 @@
     }
 
     function updateProgressText(phase) {
-        var text = queryOne('#sp-progress-text, #rb-progress-text');
+        var text = queryOne('#sp-progress-text, #sprb-progress-text');
         if (text) text.textContent = phaseLabels[phase] || phase || 'Processing backup…';
-        var modalText = document.getElementById('rb-modal-phase');
+        var modalText = document.getElementById('sprb-modal-phase');
         if (modalText) modalText.textContent = phaseLabels[phase] || phase || 'Processing backup…';
     }
 
@@ -58,7 +58,7 @@
     }
 
     function updateInlineProgress(data) {
-        var overlay = queryOne('#sp-progress-overlay, #rb-progress-overlay');
+        var overlay = queryOne('#sp-progress-overlay, #sprb-progress-overlay');
         if (!overlay) return;
 
         if (!shouldShowInlineProgress()) {
@@ -96,10 +96,10 @@
     }
 
     function updateModalProgress(data) {
-        var dbRow = document.getElementById('rb-modal-db-size');
-        var filesRow = document.getElementById('rb-modal-files-size');
-        var totalRow = document.getElementById('rb-modal-total-size');
-        var barFill = document.getElementById('rb-modal-bar-fill');
+        var dbRow = document.getElementById('sprb-modal-db-size');
+        var filesRow = document.getElementById('sprb-modal-files-size');
+        var totalRow = document.getElementById('sprb-modal-total-size');
+        var barFill = document.getElementById('sprb-modal-bar-fill');
 
         var dbSize = data.dbSize || 0;
         var filesSize = data.filesSize || 0;
@@ -130,7 +130,7 @@
             pctValue = phasePercent[data.phase] || 0;
         }
 
-        var pctEl = document.getElementById('rb-modal-pct');
+        var pctEl = document.getElementById('sprb-modal-pct');
         if (pctEl) pctEl.textContent = pctValue + '%';
         if (barFill) barFill.style.width = pctValue + '%';
 
@@ -145,35 +145,35 @@
         removeBackupModal();
 
         backupModalOverlay = document.createElement('div');
-        backupModalOverlay.id = 'rb-backup-modal-overlay';
+        backupModalOverlay.id = 'sprb-backup-modal-overlay';
         backupModalOverlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100099;';
         document.body.appendChild(backupModalOverlay);
 
         backupModal = document.createElement('div');
-        backupModal.id = 'rb-backup-modal';
+        backupModal.id = 'sprb-backup-modal';
         backupModal.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border:1px solid #ccd0d4;border-radius:4px;padding:20px 24px;z-index:100100;box-shadow:0 2px 10px rgba(0,0,0,.15);min-width:300px;text-align:center;';
 
-        backupModal.innerHTML = '<div id="rb-modal-icon" style="margin-bottom:12px;">'
-            + '<svg id="rb-modal-spinner" width="36" height="36" viewBox="0 0 24 24" style="animation:rb-spin 1s linear infinite;color:#2271b1;">'
+        backupModal.innerHTML = '<div id="sprb-modal-icon" style="margin-bottom:12px;">'
+            + '<svg id="sprb-modal-spinner" width="36" height="36" viewBox="0 0 24 24" style="animation:sprb-spin 1s linear infinite;color:#2271b1;">'
             + '<path d="M12 2a10 10 0 0 1 10 10h-3a7 7 0 0 0-7-7V2Z" fill="currentColor"/></svg>'
-            + '<style>@keyframes rb-spin{to{transform:rotate(360deg)}}</style>'
+            + '<style>@keyframes sprb-spin{to{transform:rotate(360deg)}}</style>'
             + '</div>'
-            + '<h3 id="rb-modal-title" style="margin:0 0 6px;">Backup in Progress</h3>'
-            + '<p id="rb-modal-phase" style="margin:0 0 6px;color:#50575e;font-size:13px;">Starting backup…</p>'
-            + '<p id="rb-modal-pct" style="margin:0 0 8px;font-size:24px;font-weight:600;color:#1d2327;font-variant-numeric:tabular-nums;">0%</p>'
-            + '<div id="rb-modal-bar" style="background:#e2e4e7;border-radius:3px;height:6px;margin:0 0 14px;overflow:hidden;">'
-            + '<div id="rb-modal-bar-fill" style="background:#2271b1;height:100%;width:0%;transition:width .4s ease;"></div>'
+            + '<h3 id="sprb-modal-title" style="margin:0 0 6px;">Backup in Progress</h3>'
+            + '<p id="sprb-modal-phase" style="margin:0 0 6px;color:#50575e;font-size:13px;">Starting backup…</p>'
+            + '<p id="sprb-modal-pct" style="margin:0 0 8px;font-size:24px;font-weight:600;color:#1d2327;font-variant-numeric:tabular-nums;">0%</p>'
+            + '<div id="sprb-modal-bar" style="background:#e2e4e7;border-radius:3px;height:6px;margin:0 0 14px;overflow:hidden;">'
+            + '<div id="sprb-modal-bar-fill" style="background:#2271b1;height:100%;width:0%;transition:width .4s ease;"></div>'
             + '</div>'
-            + '<table id="rb-modal-sizes" style="width:100%;font-size:12px;color:#50575e;border-collapse:collapse;">'
-            + '<tr><td style="text-align:left;padding:3px 0;">Database</td><td id="rb-modal-db-size" style="text-align:right;padding:3px 0;font-variant-numeric:tabular-nums;">—</td></tr>'
-            + '<tr><td style="text-align:left;padding:3px 0;">Files</td><td id="rb-modal-files-size" style="text-align:right;padding:3px 0;font-variant-numeric:tabular-nums;">—</td></tr>'
-            + '<tr style="border-top:1px solid #e2e4e7;"><td style="text-align:left;padding:6px 0 0;font-weight:600;">Total</td><td id="rb-modal-total-size" style="text-align:right;padding:6px 0 0;font-weight:600;font-variant-numeric:tabular-nums;">—</td></tr>'
+            + '<table id="sprb-modal-sizes" style="width:100%;font-size:12px;color:#50575e;border-collapse:collapse;">'
+            + '<tr><td style="text-align:left;padding:3px 0;">Database</td><td id="sprb-modal-db-size" style="text-align:right;padding:3px 0;font-variant-numeric:tabular-nums;">—</td></tr>'
+            + '<tr><td style="text-align:left;padding:3px 0;">Files</td><td id="sprb-modal-files-size" style="text-align:right;padding:3px 0;font-variant-numeric:tabular-nums;">—</td></tr>'
+            + '<tr style="border-top:1px solid #e2e4e7;"><td style="text-align:left;padding:6px 0 0;font-weight:600;">Total</td><td id="sprb-modal-total-size" style="text-align:right;padding:6px 0 0;font-weight:600;font-variant-numeric:tabular-nums;">—</td></tr>'
             + '</table>';
 
         document.body.appendChild(backupModal);
 
         var dismissBtn = document.createElement('button');
-        dismissBtn.id = 'rb-modal-dismiss';
+        dismissBtn.id = 'sprb-modal-dismiss';
         dismissBtn.type = 'button';
         dismissBtn.className = 'button';
         dismissBtn.style.cssText = 'margin-top:14px;';
@@ -201,22 +201,22 @@
 
         var sizeSummary = '';
         if (type === 'success' && lastBackupSizes.total > 0) {
-            sizeSummary = '<table id="rb-modal-result-sizes" style="width:100%;font-size:12px;color:#50575e;border-collapse:collapse;margin:0 0 14px;">'
+            sizeSummary = '<table id="sprb-modal-result-sizes" style="width:100%;font-size:12px;color:#50575e;border-collapse:collapse;margin:0 0 14px;">'
                 + '<tr><td style="text-align:left;padding:3px 0;">Database</td><td style="text-align:right;padding:3px 0;font-variant-numeric:tabular-nums;">' + formatBytes(lastBackupSizes.db) + '</td></tr>'
                 + '<tr><td style="text-align:left;padding:3px 0;">Files</td><td style="text-align:right;padding:3px 0;font-variant-numeric:tabular-nums;">' + formatBytes(lastBackupSizes.files) + '</td></tr>'
                 + '<tr style="border-top:1px solid #e2e4e7;"><td style="text-align:left;padding:6px 0 0;font-weight:600;">Total</td><td style="text-align:right;padding:6px 0 0;font-weight:600;font-variant-numeric:tabular-nums;">' + formatBytes(lastBackupSizes.total) + '</td></tr>'
                 + '</table>';
         }
 
-        backupModal.innerHTML = '<div id="rb-modal-result-icon" style="margin-bottom:12px;">' + iconSvg + '</div>'
-            + '<h3 id="rb-modal-result-title" style="margin:0 0 8px;">' + titleText + '</h3>'
-            + '<p id="rb-modal-result-message" style="margin:0 0 ' + (sizeSummary ? '10' : '16') + 'px;color:#50575e;font-size:13px;">' + escHtml(msg) + '</p>'
+        backupModal.innerHTML = '<div id="sprb-modal-result-icon" style="margin-bottom:12px;">' + iconSvg + '</div>'
+            + '<h3 id="sprb-modal-result-title" style="margin:0 0 8px;">' + titleText + '</h3>'
+            + '<p id="sprb-modal-result-message" style="margin:0 0 ' + (sizeSummary ? '10' : '16') + 'px;color:#50575e;font-size:13px;">' + escHtml(msg) + '</p>'
             + sizeSummary
-            + '<div id="rb-modal-result-actions" style="display:flex;gap:8px;justify-content:center;">'
-            + '<button id="rb-modal-close" type="button" class="button button-primary" style="min-width:90px;">Close</button>'
+            + '<div id="sprb-modal-result-actions" style="display:flex;gap:8px;justify-content:center;">'
+            + '<button id="sprb-modal-close" type="button" class="button button-primary" style="min-width:90px;">Close</button>'
             + '</div>';
 
-        document.getElementById('rb-modal-close').addEventListener('click', function () {
+        document.getElementById('sprb-modal-close').addEventListener('click', function () {
             removeBackupModal();
         });
     }
@@ -328,8 +328,8 @@
             .then(function (r) { return r.text(); })
             .then(function (html) {
                 var doc = new DOMParser().parseFromString(html, 'text/html');
-                replacePanel('.sp-card--history, .rb-card--history', doc);
-                replacePanel('.sp-card--log, .rb-card--log', doc);
+                replacePanel('.sp-card--history, .sprb-card--history', doc);
+                replacePanel('.sp-card--log, .sprb-card--log', doc);
             });
     }
 
@@ -345,7 +345,7 @@
         if (!activeJobId) return Promise.resolve(null);
 
         var body = new FormData();
-        body.append('action', 'rb_backup_status');
+        body.append('action', 'sprb_backup_status');
         body.append('_nonce', rbAdmin.nonce);
         body.append('job_id', activeJobId);
 
@@ -439,7 +439,7 @@
 
     function probeActiveJob() {
         var body = new FormData();
-        body.append('action', 'rb_backup_status');
+        body.append('action', 'sprb_backup_status');
         body.append('_nonce', rbAdmin.nonce);
 
         return postAjax(body)
@@ -461,10 +461,10 @@
     }
 
     function setBackupUiBusy(isBusy) {
-        var overlay = queryOne('#sp-progress-overlay, #rb-progress-overlay');
-        var actions = queryOne('#sp-manual-actions, #rb-manual-actions');
-        var backupNowBtn = document.getElementById('rb-backup-now-btn');
-        queryAll('.sp-ajax-backup, .rb-ajax-backup').forEach(function (b) { b.disabled = isBusy; });
+        var overlay = queryOne('#sp-progress-overlay, #sprb-progress-overlay');
+        var actions = queryOne('#sp-manual-actions, #sprb-manual-actions');
+        var backupNowBtn = document.getElementById('sprb-backup-now-btn');
+        queryAll('.sp-ajax-backup, .sprb-ajax-backup').forEach(function (b) { b.disabled = isBusy; });
         if (backupNowBtn) backupNowBtn.disabled = isBusy;
         if (overlay) overlay.style.display = isBusy && shouldShowInlineProgress() ? '' : 'none';
         if (actions) actions.style.opacity = isBusy ? '0.5' : '';
@@ -476,11 +476,11 @@
     }
 
     /* ── Backup Now popup ─────────────────────────────── */
-    var popupOverlay = document.getElementById('rb-backup-popup-overlay');
-    var backupNowBtn = document.getElementById('rb-backup-now-btn');
-    var popupCloseBtn = document.getElementById('rb-backup-popup-close');
-    var popupCancelBtn = document.getElementById('rb-backup-popup-cancel');
-    var popupStartBtn = document.getElementById('rb-backup-popup-start');
+    var popupOverlay = document.getElementById('sprb-backup-popup-overlay');
+    var backupNowBtn = document.getElementById('sprb-backup-now-btn');
+    var popupCloseBtn = document.getElementById('sprb-backup-popup-close');
+    var popupCancelBtn = document.getElementById('sprb-backup-popup-cancel');
+    var popupStartBtn = document.getElementById('sprb-backup-popup-start');
 
     function openBackupPopup() {
         if (popupOverlay) popupOverlay.style.display = '';
@@ -505,13 +505,13 @@
         });
     }
 
-    var saveSettingsBtn = document.getElementById('rb-save-settings-btn');
-    var headerSaveForm = document.getElementById('rb-header-save-form');
-    var headerSavePayload = document.getElementById('rb-header-save-payload');
-    var scheduleFormDb = document.getElementById('rb-schedule-form-db');
-    var scheduleFormFiles = document.getElementById('rb-schedule-form-files');
-    var remoteForm = document.getElementById('rb-remote-form');
-    var pullForm = document.getElementById('rb-pull-form');
+    var saveSettingsBtn = document.getElementById('sprb-save-settings-btn');
+    var headerSaveForm = document.getElementById('sprb-header-save-form');
+    var headerSavePayload = document.getElementById('sprb-header-save-payload');
+    var scheduleFormDb = document.getElementById('sprb-schedule-form-db');
+    var scheduleFormFiles = document.getElementById('sprb-schedule-form-files');
+    var remoteForm = document.getElementById('sprb-remote-form');
+    var pullForm = document.getElementById('sprb-pull-form');
 
     function appendHeaderSaveFields(form, prefix) {
         if (!form || !headerSavePayload) {
@@ -548,26 +548,26 @@
         saveSettingsBtn.addEventListener('click', function () {
             saveSettingsBtn.disabled = true;
             headerSavePayload.innerHTML = '';
-            appendHeaderSaveFields(scheduleFormDb, 'rb-header-save-schedule-db');
-            appendHeaderSaveFields(scheduleFormFiles, 'rb-header-save-schedule-files');
-            appendHeaderSaveFields(remoteForm, 'rb-header-save-remote');
-            appendHeaderSaveFields(pullForm, 'rb-header-save-pull');
+            appendHeaderSaveFields(scheduleFormDb, 'sprb-header-save-schedule-db');
+            appendHeaderSaveFields(scheduleFormFiles, 'sprb-header-save-schedule-files');
+            appendHeaderSaveFields(remoteForm, 'sprb-header-save-remote');
+            appendHeaderSaveFields(pullForm, 'sprb-header-save-pull');
             headerSaveForm.requestSubmit();
         });
 
-        var modalSaveBtn = document.getElementById('rb-settings-modal-save');
+        var modalSaveBtn = document.getElementById('sprb-settings-modal-save');
         if (modalSaveBtn) {
             modalSaveBtn.addEventListener('click', function () {
-                closeGenericModal(document.getElementById('rb-settings-modal'));
+                closeGenericModal(document.getElementById('sprb-settings-modal'));
                 saveSettingsBtn.click();
             });
         }
     }
 
-    var copyTokenBtn = document.getElementById('rb-copy-token-btn');
+    var copyTokenBtn = document.getElementById('sprb-copy-token-btn');
     if (copyTokenBtn) {
         copyTokenBtn.addEventListener('click', function () {
-            var codeEl = document.getElementById('rb-pull-token-display');
+            var codeEl = document.getElementById('sprb-pull-token-display');
             if (codeEl && navigator.clipboard) {
                 navigator.clipboard.writeText(codeEl.textContent.trim());
                 copyTokenBtn.textContent = 'Copied!';
@@ -578,9 +578,9 @@
 
     if (popupStartBtn) {
         popupStartBtn.addEventListener('click', function () {
-            var scopeRadio = document.querySelector('input[name="rb_backup_scope"]:checked');
+            var scopeRadio = document.querySelector('input[name="sprb_backup_scope"]:checked');
             var scope = scopeRadio ? scopeRadio.value : 'database';
-            var remoteCheckbox = document.getElementById('rb_backup_send_remote');
+            var remoteCheckbox = document.getElementById('sprb_backup_send_remote');
             var remoteMode = (remoteCheckbox && remoteCheckbox.checked) ? 'remote' : 'local';
 
             closeBackupPopup();
@@ -588,7 +588,7 @@
             updateProgressText('queued');
 
             var body = new FormData();
-            body.append('action', 'rb_run_backup');
+            body.append('action', 'sprb_run_backup');
             body.append('_nonce', rbAdmin.nonce);
             body.append('scope', scope);
             body.append('remote_mode', remoteMode);
@@ -707,8 +707,8 @@
     }
 
     /* ── Remote protocol / auth toggles ──────────────── */
-    var protocolSelect = document.getElementById('rb_remote_protocol');
-    var authSelect = document.getElementById('rb_ssh_auth_method');
+    var protocolSelect = document.getElementById('sprb_remote_protocol');
+    var authSelect = document.getElementById('sprb_ssh_auth_method');
 
     function toggleProtocol() {
         if (!protocolSelect) return;
@@ -746,7 +746,7 @@
     toggleAuth();
 
     /* ── Google Drive disconnect ──────────────────────── */
-    var gdriveDisconnect = document.getElementById('rb-gdrive-disconnect');
+    var gdriveDisconnect = document.getElementById('sprb-gdrive-disconnect');
     if (gdriveDisconnect) {
         gdriveDisconnect.addEventListener('click', function () {
             if (!confirm('Disconnect Google Drive? You will need to re-authorize to use it again.')) return;
@@ -756,12 +756,12 @@
             xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
             xhr.onload = function () { location.reload(); };
             xhr.onerror = function () { gdriveDisconnect.disabled = false; };
-            xhr.send('action=rb_gdrive_disconnect&_nonce=' + encodeURIComponent(rbAdmin.nonce));
+            xhr.send('action=sprb_gdrive_disconnect&_nonce=' + encodeURIComponent(rbAdmin.nonce));
         });
     }
 
     /* ── OneDrive disconnect ─────────────────────────── */
-    var onedriveDisconnect = document.getElementById('rb-onedrive-disconnect');
+    var onedriveDisconnect = document.getElementById('sprb-onedrive-disconnect');
     if (onedriveDisconnect) {
         onedriveDisconnect.addEventListener('click', function () {
             if (!confirm('Disconnect OneDrive? You will need to re-authorize to use it again.')) return;
@@ -771,12 +771,12 @@
             xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
             xhr.onload = function () { location.reload(); };
             xhr.onerror = function () { onedriveDisconnect.disabled = false; };
-            xhr.send('action=rb_onedrive_disconnect&_nonce=' + encodeURIComponent(rbAdmin.nonce));
+            xhr.send('action=sprb_onedrive_disconnect&_nonce=' + encodeURIComponent(rbAdmin.nonce));
         });
     }
 
     /* ── Dropbox disconnect ─────────────────────────── */
-    var dropboxDisconnect = document.getElementById('rb-dropbox-disconnect');
+    var dropboxDisconnect = document.getElementById('sprb-dropbox-disconnect');
     if (dropboxDisconnect) {
         dropboxDisconnect.addEventListener('click', function () {
             if (!confirm('Disconnect Dropbox? You will need to re-authorize to use it again.')) return;
@@ -786,27 +786,27 @@
             xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
             xhr.onload = function () { location.reload(); };
             xhr.onerror = function () { dropboxDisconnect.disabled = false; };
-            xhr.send('action=rb_dropbox_disconnect&_nonce=' + encodeURIComponent(rbAdmin.nonce));
+            xhr.send('action=sprb_dropbox_disconnect&_nonce=' + encodeURIComponent(rbAdmin.nonce));
         });
     }
 
     /* ── Cloud auth modal ────────────────────────────── */
-    var authModalOverlay = document.getElementById('rb-auth-modal-overlay');
-    var authModalTitle = document.getElementById('rb-auth-modal-title');
-    var authModalLink = document.getElementById('rb-auth-modal-link');
-    var authModalCode = document.getElementById('rb-auth-modal-code');
-    var authModalStatus = document.getElementById('rb-auth-modal-status');
-    var authModalSubmit = document.getElementById('rb-auth-modal-submit');
-    var authModalCustomToggle = document.getElementById('rb-auth-modal-custom-toggle');
-    var authModalCustomFields = document.getElementById('rb-auth-modal-custom-fields');
-    var authModalClientId = document.getElementById('rb-auth-modal-client-id');
-    var authModalClientSecret = document.getElementById('rb-auth-modal-client-secret');
+    var authModalOverlay = document.getElementById('sprb-auth-modal-overlay');
+    var authModalTitle = document.getElementById('sprb-auth-modal-title');
+    var authModalLink = document.getElementById('sprb-auth-modal-link');
+    var authModalCode = document.getElementById('sprb-auth-modal-code');
+    var authModalStatus = document.getElementById('sprb-auth-modal-status');
+    var authModalSubmit = document.getElementById('sprb-auth-modal-submit');
+    var authModalCustomToggle = document.getElementById('sprb-auth-modal-custom-toggle');
+    var authModalCustomFields = document.getElementById('sprb-auth-modal-custom-fields');
+    var authModalClientId = document.getElementById('sprb-auth-modal-client-id');
+    var authModalClientSecret = document.getElementById('sprb-auth-modal-client-secret');
     var authModalProvider = '';
     var authModalBaseUrl = '';
-    var providerActions = { gdrive: 'rb_gdrive_manual_auth', onedrive: 'rb_onedrive_manual_auth', dropbox: 'rb_dropbox_manual_auth' };
+    var providerActions = { gdrive: 'sprb_gdrive_manual_auth', onedrive: 'sprb_onedrive_manual_auth', dropbox: 'sprb_dropbox_manual_auth' };
     var providerLabels = { gdrive: 'Google Drive', onedrive: 'OneDrive', dropbox: 'Dropbox' };
-    var providerIdFields = { gdrive: 'rb_gdrive_client_id', onedrive: 'rb_onedrive_client_id', dropbox: 'rb_dropbox_client_id' };
-    var providerSecretFields = { gdrive: 'rb_gdrive_client_secret', onedrive: 'rb_onedrive_client_secret', dropbox: 'rb_dropbox_client_secret' };
+    var providerIdFields = { gdrive: 'sprb_gdrive_client_id', onedrive: 'sprb_onedrive_client_id', dropbox: 'sprb_dropbox_client_id' };
+    var providerSecretFields = { gdrive: 'sprb_gdrive_client_secret', onedrive: 'sprb_onedrive_client_secret', dropbox: 'sprb_dropbox_client_secret' };
 
     /* Custom OAuth toggle in modal */
     if (authModalCustomToggle) {
@@ -832,9 +832,9 @@
         });
     }
 
-    var authModalTest = document.getElementById('rb-auth-modal-test');
+    var authModalTest = document.getElementById('sprb-auth-modal-test');
 
-    document.querySelectorAll('.rb-auth-open').forEach(function (btn) {
+    document.querySelectorAll('.sprb-auth-open').forEach(function (btn) {
         btn.addEventListener('click', function () {
             authModalProvider = btn.getAttribute('data-provider');
             authModalBaseUrl = btn.getAttribute('data-auth-url');
@@ -861,8 +861,8 @@
             location.reload();
         }
     }
-    var authModalClose = document.getElementById('rb-auth-modal-close');
-    var authModalCancel = document.getElementById('rb-auth-modal-cancel');
+    var authModalClose = document.getElementById('sprb-auth-modal-close');
+    var authModalCancel = document.getElementById('sprb-auth-modal-cancel');
     if (authModalClose) authModalClose.addEventListener('click', closeAuthModal);
     if (authModalCancel) authModalCancel.addEventListener('click', closeAuthModal);
     if (authModalOverlay) authModalOverlay.addEventListener('click', function (e) { if (e.target === authModalOverlay) closeAuthModal(); });
@@ -928,21 +928,21 @@
                 } catch (e) { authModalStatus.textContent = 'Unexpected response.'; authModalStatus.style.color = '#d63638'; }
             };
             xhr.onerror = function () { authModalTest.disabled = false; authModalStatus.textContent = 'Network error.'; authModalStatus.style.color = '#d63638'; };
-            xhr.send('action=rb_test_connection&_nonce=' + encodeURIComponent(rbAdmin.nonce));
+            xhr.send('action=sprb_test_connection&_nonce=' + encodeURIComponent(rbAdmin.nonce));
         });
     }
 
     /* ── Schedule weekday toggles ────────────────────── */
     function toggleWeeklyScheduleRow(scope) {
-        var select = document.getElementById('rb_schedule_' + scope + '_frequency');
-        var fieldId = scope === 'database' ? 'rb-db-weekday-field' : 'rb-files-weekday-field';
+        var select = document.getElementById('sprb_schedule_' + scope + '_frequency');
+        var fieldId = scope === 'database' ? 'sprb-db-weekday-field' : 'sprb-files-weekday-field';
         var row = document.getElementById(fieldId);
         if (!select || !row) return;
         row.style.display = select.value === 'weekly' ? '' : 'none';
     }
 
     ['database', 'files'].forEach(function (scope) {
-        var select = document.getElementById('rb_schedule_' + scope + '_frequency');
+        var select = document.getElementById('sprb_schedule_' + scope + '_frequency');
         if (!select) return;
         select.addEventListener('change', function () {
             toggleWeeklyScheduleRow(scope);
@@ -1069,7 +1069,7 @@
         childrenContainer.innerHTML = '<div class="sp-tree-loading" id="sp-loading-' + path.replace(/\//g, '-') + '"><span class="dashicons dashicons-update sp-spin"></span> Loading…</div>';
 
         var body = new FormData();
-        body.append('action', 'rb_list_dir');
+        body.append('action', 'sprb_list_dir');
         body.append('_nonce', rbAdmin.nonce);
         body.append('path', path);
 
@@ -1161,9 +1161,9 @@
 
     /* ── Folder picker — always visible in modal, no collapsible ── */
 
-    var allBtn  = queryOne('#sp-folders-all, #rb-folders-all');
-    var noneBtn = queryOne('#sp-folders-none, #rb-folders-none');
-    var saveBtn = queryOne('#sp-folders-save, #rb-folders-save');
+    var allBtn  = queryOne('#sp-folders-all, #sprb-folders-all');
+    var noneBtn = queryOne('#sp-folders-none, #sprb-folders-none');
+    var saveBtn = queryOne('#sp-folders-save, #sprb-folders-save');
 
     if (allBtn) {
         allBtn.addEventListener('click', function () {
@@ -1182,13 +1182,13 @@
     if (saveBtn) {
         saveBtn.addEventListener('click', function () {
             var body = new FormData();
-            body.append('action', 'rb_save_folders');
+            body.append('action', 'sprb_save_folders');
             body.append('_nonce', rbAdmin.nonce);
             collectFolders().forEach(function (f) { body.append('folders[]', f); });
 
             postAjax(body)
                 .then(function (d) {
-                    var saved = queryOne('#sp-folders-saved, #rb-folders-saved');
+                    var saved = queryOne('#sp-folders-saved, #sprb-folders-saved');
                     if (d.success && saved) {
                         saved.style.display = '';
                         setTimeout(function () { saved.style.display = 'none'; }, 2000);
@@ -1242,7 +1242,7 @@
 
     queryAll('.sp-modal-overlay').forEach(function (overlay) {
         // Skip the backup popup and auth modal — they have their own handlers.
-        if (overlay.id === 'rb-backup-popup-overlay' || overlay.id === 'rb-auth-modal-overlay') return;
+        if (overlay.id === 'sprb-backup-popup-overlay' || overlay.id === 'sprb-auth-modal-overlay') return;
 
         var closeBtn = overlay.querySelector('.sp-modal__close');
         var cancelBtns = overlay.querySelectorAll('[id$="-cancel"]');
@@ -1274,9 +1274,9 @@
         });
         if (!visible) return;
         // Auth modal and backup popup have their own Escape handlers — delegate.
-        if (visible.id === 'rb-auth-modal-overlay') {
+        if (visible.id === 'sprb-auth-modal-overlay') {
             closeAuthModal();
-        } else if (visible.id === 'rb-backup-popup-overlay') {
+        } else if (visible.id === 'sprb-backup-popup-overlay') {
             closeBackupPopup();
         } else {
             closeGenericModal(visible);
@@ -1321,8 +1321,8 @@
 
     function replaceMonitorSnapshot(data) {
         var expanded = monitorExpandedUrls();
-        var summary = queryOne('#sp-monitor-summary, #rb-monitor-summary');
-        var sites = queryOne('#sp-monitor-sites-section, #rb-monitor-sites');
+        var summary = queryOne('#sp-monitor-summary, #sprb-monitor-summary');
+        var sites = queryOne('#sp-monitor-sites-section, #sprb-monitor-sites');
 
         if (summary && typeof data.summaryHtml === 'string') {
             summary.innerHTML = data.summaryHtml;
@@ -1340,7 +1340,7 @@
     }
 
     function replaceMonitorProgress(data) {
-        var panel = queryOne('#sp-monitor-progress-panel, #rb-monitor-progress-panel');
+        var panel = queryOne('#sp-monitor-progress-panel, #sprb-monitor-progress-panel');
         if (!panel || typeof data.progressHtml !== 'string') return;
 
         var wrapper = document.createElement('div');
@@ -1366,7 +1366,7 @@
         if (!monitorEnabled()) return Promise.resolve(null);
 
         var body = new FormData();
-        body.append('action', 'rb_monitor_snapshot');
+        body.append('action', 'sprb_monitor_snapshot');
         body.append('_nonce', rbAdmin.nonce);
 
         return postAjax(body)
@@ -1392,7 +1392,7 @@
         if (!monitorEnabled()) return Promise.resolve(null);
 
         var body = new FormData();
-        body.append('action', 'rb_monitor_progress');
+        body.append('action', 'sprb_monitor_progress');
         body.append('_nonce', rbAdmin.nonce);
 
         return postAjax(body)
@@ -1439,7 +1439,7 @@
             e.preventDefault();
 
             var body = new FormData();
-            body.append('action', 'rb_monitor_action');
+            body.append('action', 'sprb_monitor_action');
             body.append('_nonce', rbAdmin.nonce);
             body.append('monitor_action', actionLink.getAttribute('data-monitor-action') || '');
             body.append('url', actionLink.getAttribute('data-url') || '');
@@ -1490,7 +1490,7 @@
 
     function startSimulation() {
         var body = new FormData();
-        body.append('action', 'rb_simulate_backup');
+        body.append('action', 'sprb_simulate_backup');
         body.append('_nonce', rbAdmin.nonce);
         body.append('sim_action', 'start');
 
@@ -1514,7 +1514,7 @@
 
     function tickSimulation() {
         var body = new FormData();
-        body.append('action', 'rb_simulate_backup');
+        body.append('action', 'sprb_simulate_backup');
         body.append('_nonce', rbAdmin.nonce);
         body.append('sim_action', 'tick');
 

@@ -5,7 +5,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Remote_Backup_Api {
 
-    const TOKEN_OPTION = 'rb_pull_token';
+    const TOKEN_OPTION = 'sprb_pull_token';
 
     private $storage;
     private $scheduler;
@@ -44,7 +44,7 @@ class Remote_Backup_Api {
             array(
                 'methods'             => 'GET',
                 'callback'            => array( $this, 'status_callback' ),
-                'permission_callback' => '__return_true',
+                'permission_callback' => array( $this, 'authorize_pull_request' ),
             )
         );
 
@@ -100,7 +100,7 @@ class Remote_Backup_Api {
         return rest_ensure_response(
             array(
                 'site'                 => home_url(),
-                'plugin_version'       => defined( 'RB_VERSION' ) ? RB_VERSION : 'unknown',
+                'plugin_version'       => defined( 'SPRB_VERSION' ) ? SPRB_VERSION : 'unknown',
                 'last_backup'          => $last_backup,
                 'last_successful'      => $this->safe_backup_summary( $last_successful ),
                 'backups'              => $safe_list,
@@ -162,7 +162,7 @@ class Remote_Backup_Api {
         $backup   = $this->storage->get_backup( $id );
 
         if ( ! $backup ) {
-            return new WP_Error( 'rb_not_found', 'Backup not found.', array( 'status' => 404 ) );
+            return new WP_Error( 'sprb_not_found', 'Backup not found.', array( 'status' => 404 ) );
         }
 
         $key_map = array(
@@ -172,14 +172,14 @@ class Remote_Backup_Api {
         );
 
         if ( empty( $key_map[ $artifact ] ) || empty( $backup[ $key_map[ $artifact ] ] ) ) {
-            return new WP_Error( 'rb_artifact_missing', 'Artifact not available for this backup.', array( 'status' => 404 ) );
+            return new WP_Error( 'sprb_artifact_missing', 'Artifact not available for this backup.', array( 'status' => 404 ) );
         }
 
         $filename = basename( (string) $backup[ $key_map[ $artifact ] ] );
         $filepath = $this->storage->resolve_storage_path( $filename );
 
         if ( ! file_exists( $filepath ) ) {
-            return new WP_Error( 'rb_file_missing', 'Backup file not found on disk.', array( 'status' => 404 ) );
+            return new WP_Error( 'sprb_file_missing', 'Backup file not found on disk.', array( 'status' => 404 ) );
         }
 
         nocache_headers();
@@ -212,7 +212,7 @@ class Remote_Backup_Api {
         );
 
         if ( is_wp_error( $result ) ) {
-            $status = 'rb_backup_running' === $result->get_error_code() ? 409 : 400;
+            $status = 'sprb_backup_running' === $result->get_error_code() ? 409 : 400;
 
             return new WP_Error(
                 $result->get_error_code(),
@@ -238,7 +238,7 @@ class Remote_Backup_Api {
         $provided   = $this->request_pull_token( $request );
 
         if ( '' === $configured || '' === $provided || ! hash_equals( $configured, $provided ) ) {
-            return new WP_Error( 'rb_unauthorized', 'Invalid pull token.', array( 'status' => 401 ) );
+            return new WP_Error( 'sprb_unauthorized', 'Invalid pull token.', array( 'status' => 401 ) );
         }
 
         return true;
@@ -264,7 +264,7 @@ class Remote_Backup_Api {
     }
 
     private function request_pull_token( WP_REST_Request $request ) {
-        $token = trim( (string) $request->get_header( 'x-rb-pull-token' ) );
+        $token = trim( (string) $request->get_header( 'x-sprb-pull-token' ) );
         if ( '' !== $token ) {
             return $token;
         }

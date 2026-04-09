@@ -5,7 +5,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Provider_Dropbox implements Remote_Provider {
 
-    private const TOKEN_OPTION        = 'rb_dropbox_tokens';
+    private const TOKEN_OPTION        = 'sprb_dropbox_tokens';
     private const CHUNK_SIZE          = 5 * 1024 * 1024; // 5 MB
     private const SIMPLE_UPLOAD_LIMIT = 150 * 1024 * 1024; // 150 MB
     private const AUTH_URL            = 'https://www.dropbox.com/oauth2/authorize';
@@ -121,48 +121,48 @@ class Provider_Dropbox implements Remote_Provider {
         $is_connected  = ! empty( $tokens['refresh_token'] );
         $auth_url      = $this->build_manual_auth_url( $client_id );
         ?>
-        <tr id="rb-row-dropbox-auth" class="sp-protocol-dropbox">
-            <td id="rb-dropbox-auth-cell" colspan="2">
+        <tr id="sprb-row-dropbox-auth" class="sp-protocol-dropbox">
+            <td id="sprb-dropbox-auth-cell" colspan="2">
                 <?php if ( $is_connected ) : ?>
-                    <span id="rb-dropbox-status" class="sp-ok">✓ Connected</span>
-                    <button type="button" id="rb-dropbox-disconnect" class="button">Disconnect</button>
+                    <span id="sprb-dropbox-status" class="sp-ok">✓ Connected</span>
+                    <button type="button" id="sprb-dropbox-disconnect" class="button">Disconnect</button>
                 <?php else : ?>
-                    <button type="button" id="rb-dropbox-auth-btn" class="button button-primary rb-auth-open" data-auth-url="<?php echo esc_url( $auth_url ); ?>" data-provider="dropbox">Authorize</button>
+                    <button type="button" id="sprb-dropbox-auth-btn" class="button button-primary sprb-auth-open" data-auth-url="<?php echo esc_url( $auth_url ); ?>" data-provider="dropbox">Authorize</button>
                 <?php endif; ?>
             </td>
         </tr>
         <?php if ( $is_connected ) : ?>
-        <tr id="rb-row-dropbox-folder" class="sp-protocol-dropbox">
-            <td id="rb-dropbox-folder-cell" colspan="2">
-                <label id="rb-label-dropbox-folder" class="sp-form-label" for="rb_dropbox_folder_name">Folder Name</label>
-                <input type="text" name="rb_dropbox_folder_name" id="rb_dropbox_folder_name" class="sp-input" value="<?php echo esc_attr( $folder_name ); ?>" placeholder="SavedPixel Backups" style="width:100%;">
+        <tr id="sprb-row-dropbox-folder" class="sp-protocol-dropbox">
+            <td id="sprb-dropbox-folder-cell" colspan="2">
+                <label id="sprb-label-dropbox-folder" class="sp-form-label" for="sprb_dropbox_folder_name">Folder Name</label>
+                <input type="text" name="sprb_dropbox_folder_name" id="sprb_dropbox_folder_name" class="sp-input" value="<?php echo esc_attr( $folder_name ); ?>" placeholder="SavedPixel Backups" style="width:100%;">
             </td>
         </tr>
         <?php endif; ?>
-        <input type="hidden" name="rb_dropbox_client_id" id="rb_dropbox_client_id" value="<?php echo esc_attr( $client_id ); ?>">
-        <input type="hidden" name="rb_dropbox_client_secret" id="rb_dropbox_client_secret" value="<?php echo esc_attr( $client_secret ); ?>">
+        <input type="hidden" name="sprb_dropbox_client_id" id="sprb_dropbox_client_id" value="<?php echo esc_attr( $client_id ); ?>">
+        <input type="hidden" name="sprb_dropbox_client_secret" id="sprb_dropbox_client_secret" value="<?php echo esc_attr( $client_secret ); ?>">
         <?php
     }
 
     public function get_settings(): array {
         return array(
-            'client_id'     => get_option( 'rb_dropbox_client_id', '' ),
-            'client_secret' => get_option( 'rb_dropbox_client_secret', '' ),
-            'folder_name'   => get_option( 'rb_dropbox_folder_name', 'SavedPixel Backups' ),
+            'client_id'     => get_option( 'sprb_dropbox_client_id', '' ),
+            'client_secret' => get_option( 'sprb_dropbox_client_secret', '' ),
+            'folder_name'   => get_option( 'sprb_dropbox_folder_name', 'SavedPixel Backups' ),
             'tokens'        => get_option( self::TOKEN_OPTION, array() ),
         );
     }
 
     public function save_settings_from_request(): void {
-        // phpcs:disable WordPress.Security.NonceVerification.Missing -- Called after check_admin_referer( 'rb_remote' ).
-        $client_id = sanitize_text_field( wp_unslash( $_POST['rb_dropbox_client_id'] ?? get_option( 'rb_dropbox_client_id', '' ) ) );
-        update_option( 'rb_dropbox_client_id', $client_id );
+        // phpcs:disable WordPress.Security.NonceVerification.Missing -- Called after check_admin_referer( 'sprb_remote' ).
+        $client_id = sanitize_text_field( wp_unslash( $_POST['sprb_dropbox_client_id'] ?? get_option( 'sprb_dropbox_client_id', '' ) ) );
+        update_option( 'sprb_dropbox_client_id', $client_id );
 
-        $client_secret = sanitize_text_field( wp_unslash( $_POST['rb_dropbox_client_secret'] ?? get_option( 'rb_dropbox_client_secret', '' ) ) );
-        update_option( 'rb_dropbox_client_secret', $client_secret );
+        $client_secret = sanitize_text_field( wp_unslash( $_POST['sprb_dropbox_client_secret'] ?? get_option( 'sprb_dropbox_client_secret', '' ) ) );
+        update_option( 'sprb_dropbox_client_secret', $client_secret );
 
-        $folder_name = sanitize_text_field( wp_unslash( $_POST['rb_dropbox_folder_name'] ?? get_option( 'rb_dropbox_folder_name', 'SavedPixel Backups' ) ) );
-        update_option( 'rb_dropbox_folder_name', $folder_name );
+        $folder_name = sanitize_text_field( wp_unslash( $_POST['sprb_dropbox_folder_name'] ?? get_option( 'sprb_dropbox_folder_name', 'SavedPixel Backups' ) ) );
+        update_option( 'sprb_dropbox_folder_name', $folder_name );
         // phpcs:enable WordPress.Security.NonceVerification.Missing
     }
 
@@ -181,9 +181,9 @@ class Provider_Dropbox implements Remote_Provider {
     public function render_status_banner(): void {
         $tokens = get_option( self::TOKEN_OPTION, array() );
         if ( ! empty( $tokens['refresh_token'] ) ) {
-            echo '<div id="rb-dropbox-banner-ok" class="sp-notice sp-notice--success"><strong>Dropbox</strong> is connected.</div>';
+            echo '<div id="sprb-dropbox-banner-ok" class="sp-notice sp-notice--success"><strong>Dropbox</strong> is connected.</div>';
         } else {
-            echo '<div id="rb-dropbox-banner-missing" class="sp-notice sp-notice--error"><strong>Dropbox</strong> is not authorized.</div>';
+            echo '<div id="sprb-dropbox-banner-missing" class="sp-notice sp-notice--error"><strong>Dropbox</strong> is not authorized.</div>';
         }
     }
 
@@ -203,8 +203,8 @@ class Provider_Dropbox implements Remote_Provider {
     }
 
     public function exchange_code( string $code, string $redirect_uri = '' ): array|WP_Error {
-        $client_id     = get_option( 'rb_dropbox_client_id', '' );
-        $client_secret = get_option( 'rb_dropbox_client_secret', '' );
+        $client_id     = get_option( 'sprb_dropbox_client_id', '' );
+        $client_secret = get_option( 'sprb_dropbox_client_secret', '' );
         if ( '' === $redirect_uri ) {
             $redirect_uri = self::MANUAL_REDIRECT_URI;
         }

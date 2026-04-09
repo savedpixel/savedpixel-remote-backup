@@ -10,8 +10,8 @@ if ( class_exists( 'Remote_Backup_Monitor' ) ) {
 // phpcs:disable WordPress.WP.AlternativeFunctions.rename_rename, WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose, WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- Monitor downloads use native file handles and atomic moves for large artifacts.
 class Remote_Backup_Monitor {
 
-    const CRON_HOOK        = 'rb_monitor_poll';
-    const CRON_SCHEDULE    = 'rb_monitor_every_5m';
+    const CRON_HOOK        = 'sprb_monitor_poll';
+    const CRON_SCHEDULE    = 'sprb_monitor_every_5m';
     const HISTORY_MAX_DAYS = 90;
     const PROGRESS_TTL     = DAY_IN_SECONDS;
 
@@ -24,9 +24,9 @@ class Remote_Backup_Monitor {
     public function __construct( Remote_Backup_Logger $logger, Remote_Backup_Storage $storage ) {
         $this->logger       = $logger;
         $this->storage      = $storage;
-        $this->sites_path   = RB_DATA_DIR . 'monitor-sites.json';
-        $this->status_path  = RB_DATA_DIR . 'monitor.json';
-        $this->history_path = RB_DATA_DIR . 'monitor-history.json';
+        $this->sites_path   = SPRB_DATA_DIR . 'monitor-sites.json';
+        $this->status_path  = SPRB_DATA_DIR . 'monitor.json';
+        $this->history_path = SPRB_DATA_DIR . 'monitor-history.json';
 
         add_action( self::CRON_HOOK, array( $this, 'poll_due_sites' ) );
         add_filter( 'cron_schedules', array( $this, 'add_schedules' ) );
@@ -42,17 +42,17 @@ class Remote_Backup_Monitor {
     }
 
     public function get_settings() {
-        $retry_minutes = absint( get_option( 'rb_monitor_retry_minutes', 15 ) );
+        $retry_minutes = absint( get_option( 'sprb_monitor_retry_minutes', 15 ) );
         if ( $retry_minutes < 5 ) {
             $retry_minutes = 5;
         }
 
-        $watch_minutes = absint( get_option( 'rb_monitor_watch_minutes', 90 ) );
+        $watch_minutes = absint( get_option( 'sprb_monitor_watch_minutes', 90 ) );
         if ( $watch_minutes < $retry_minutes ) {
             $watch_minutes = $retry_minutes;
         }
 
-        $notification_email = trim( (string) get_option( 'rb_monitor_notification_email', '' ) );
+        $notification_email = trim( (string) get_option( 'sprb_monitor_notification_email', '' ) );
         if ( '' === $notification_email ) {
             $notification_email = (string) get_option( 'admin_email', '' );
         }
@@ -93,7 +93,7 @@ class Remote_Backup_Monitor {
         );
 
         if ( empty( $site['url'] ) ) {
-            return new WP_Error( 'rb_monitor', 'Invalid URL.' );
+            return new WP_Error( 'sprb_monitor', 'Invalid URL.' );
         }
 
         $sites   = $this->get_sites();
@@ -151,7 +151,7 @@ class Remote_Backup_Monitor {
         }
 
         if ( ! $found ) {
-            return new WP_Error( 'rb_monitor', 'Site not found.' );
+            return new WP_Error( 'sprb_monitor', 'Site not found.' );
         }
 
         $this->save_json( $this->sites_path, $updated );
@@ -236,7 +236,7 @@ class Remote_Backup_Monitor {
     public function pull_site_artifact( $url, $artifact_type ) {
         $artifact_type = sanitize_text_field( (string) $artifact_type );
         if ( ! in_array( $artifact_type, array( 'database', 'files', 'plugins' ), true ) ) {
-            return new WP_Error( 'rb_monitor_artifact', 'Invalid artifact type.' );
+            return new WP_Error( 'sprb_monitor_artifact', 'Invalid artifact type.' );
         }
 
         return $this->poll_site(
@@ -275,7 +275,7 @@ class Remote_Backup_Monitor {
     public function poll_site( $url, $force = true, $options = array() ) {
         $site = $this->get_site( $url );
         if ( ! $site ) {
-            return new WP_Error( 'rb_monitor', 'Site not found.' );
+            return new WP_Error( 'sprb_monitor', 'Site not found.' );
         }
 
         $options = $this->normalize_poll_options( $options );
@@ -348,7 +348,7 @@ class Remote_Backup_Monitor {
             $body = json_decode( wp_remote_retrieve_body( $response ), true );
 
             if ( 200 !== $code || ! is_array( $body ) ) {
-                $error = new WP_Error( 'rb_monitor_http', 'HTTP ' . $code );
+                $error = new WP_Error( 'sprb_monitor_http', 'HTTP ' . $code );
                 $entry = $this->handle_offline_poll( $site, $entry, $settings, $error, $now_ts );
                 $statuses[ $site['url'] ] = $entry;
                 $this->save_json( $this->status_path, $statuses );
@@ -1136,7 +1136,7 @@ class Remote_Backup_Monitor {
         }
 
         if ( '' === $backup_id || empty( $artifacts ) ) {
-            return new WP_Error( 'rb_monitor_download', 'Backup catalog entry is missing artifact data.' );
+            return new WP_Error( 'sprb_monitor_download', 'Backup catalog entry is missing artifact data.' );
         }
 
         $dir              = $this->storage->remote_pull_backup_dir( $site['url'], $backup_id );
@@ -1150,7 +1150,7 @@ class Remote_Backup_Monitor {
             $timeout      = $this->download_timeout_seconds( $artifact );
 
             if ( '' === $type || '' === $download_url || '' === $filename ) {
-                return new WP_Error( 'rb_monitor_download', 'Backup catalog entry is missing a download URL.' );
+                return new WP_Error( 'sprb_monitor_download', 'Backup catalog entry is missing a download URL.' );
             }
 
             $target   = $this->storage->remote_pull_artifact_path( $site['url'], $backup_id, $type, $filename );
@@ -1205,7 +1205,7 @@ class Remote_Backup_Monitor {
                 if ( file_exists( $tempfile ) ) {
                     wp_delete_file( $tempfile );
                 }
-                return new WP_Error( 'rb_monitor_download', sprintf( 'Download failed for %1$s: %2$s%3$s', $filename, $response->get_error_message(), $detail ) );
+                return new WP_Error( 'sprb_monitor_download', sprintf( 'Download failed for %1$s: %2$s%3$s', $filename, $response->get_error_message(), $detail ) );
             }
 
             if ( 200 !== wp_remote_retrieve_response_code( $response ) || ! file_exists( $tempfile ) ) {
@@ -1213,18 +1213,18 @@ class Remote_Backup_Monitor {
                 if ( file_exists( $tempfile ) ) {
                     wp_delete_file( $tempfile );
                 }
-                return new WP_Error( 'rb_monitor_download', sprintf( 'Download failed for %1$s: HTTP %2$d.%3$s', $filename, wp_remote_retrieve_response_code( $response ), $detail ) );
+                return new WP_Error( 'sprb_monitor_download', sprintf( 'Download failed for %1$s: HTTP %2$d.%3$s', $filename, wp_remote_retrieve_response_code( $response ), $detail ) );
             }
 
             if ( file_exists( $target ) && ! wp_delete_file( $target ) ) {
                 wp_delete_file( $tempfile );
-                return new WP_Error( 'rb_monitor_download', sprintf( 'Download failed for %1$s: existing target file is not writable.', $filename ) );
+                return new WP_Error( 'sprb_monitor_download', sprintf( 'Download failed for %1$s: existing target file is not writable.', $filename ) );
             }
 
             if ( ! @rename( $tempfile, $target ) ) {
                 if ( ! @copy( $tempfile, $target ) ) {
                     wp_delete_file( $tempfile );
-                    return new WP_Error( 'rb_monitor_download', sprintf( 'Download failed for %1$s: could not move the streamed file into storage.', $filename ) );
+                    return new WP_Error( 'sprb_monitor_download', sprintf( 'Download failed for %1$s: could not move the streamed file into storage.', $filename ) );
                 }
                 wp_delete_file( $tempfile );
             }
@@ -1482,7 +1482,7 @@ class Remote_Backup_Monitor {
     }
 
     private function progress_key( $url ) {
-        return 'rb_monitor_progress_' . md5( strtolower( untrailingslashit( (string) $url ) ) );
+        return 'sprb_monitor_progress_' . md5( strtolower( untrailingslashit( (string) $url ) ) );
     }
 
     private function set_site_progress( $url, $changes ) {
@@ -1520,12 +1520,12 @@ class Remote_Backup_Monitor {
         $handle = fopen( $path, 'c+' );
 
         if ( ! $handle ) {
-            return new WP_Error( 'rb_monitor_lock', 'Failed to open the monitor lock file.' );
+            return new WP_Error( 'sprb_monitor_lock', 'Failed to open the monitor lock file.' );
         }
 
         if ( ! flock( $handle, LOCK_EX | LOCK_NB ) ) {
             fclose( $handle );
-            return new WP_Error( 'rb_monitor_locked', 'Another poll is already running for this site.' );
+            return new WP_Error( 'sprb_monitor_locked', 'Another poll is already running for this site.' );
         }
 
         ftruncate( $handle, 0 );
@@ -1556,7 +1556,7 @@ class Remote_Backup_Monitor {
     }
 
     private function site_lock_path( $url ) {
-        return RB_DATA_DIR . 'monitor-lock-' . md5( (string) $url ) . '.lock';
+        return SPRB_DATA_DIR . 'monitor-lock-' . md5( (string) $url ) . '.lock';
     }
 
     private function download_error_context( $filepath ) {

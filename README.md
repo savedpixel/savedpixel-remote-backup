@@ -32,6 +32,7 @@ SavedPixel Remote Backup is a WordPress backup workspace for database dumps, fil
 - AJAX lazy-loading folder tree with checkbox cascading for granular file selection.
 - Pull-token API for remote catalog access and artifact downloads by a monitor site.
 - Pull-token-authenticated REST endpoint for remote backup triggering by a paired monitor site.
+- Automatic migration of settings from older prefix on upgrade.
 - Trigger metadata response for monitor-side run tracking.
 - In-dashboard transfer/progress state for long-running backups.
 - Summary cards showing backup counts, remote status, and storage usage at a glance.

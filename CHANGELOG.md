@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0 - 2026-04-09
+
+- Changed all option keys, constants, AJAX hooks, cron hooks, transients, and HTML element IDs from `rb_`/`RB_` prefix to `sprb_`/`SPRB_` prefix for WordPress.org 4-character uniqueness requirement.
+- Added automatic migration of existing `rb_*` option keys, cron events, and transients to `sprb_*` equivalents on upgrade.
+- Changed `/savedpixel-backup/v1/status` REST endpoint to require pull-token authorization instead of public access.
+- Added `== External services ==` section to `readme.txt` documenting Google Drive, Dropbox, OneDrive, SSH, and FTP integrations with Terms of Service and Privacy Policy links.
+
 ## 1.2.1 - 2026-03-27
 
 - Added dismissible in-progress backup modal support with inline progress continuation.

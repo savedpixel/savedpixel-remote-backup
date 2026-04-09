@@ -12,7 +12,7 @@ class Remote_Backup_Logger {
     private $log_file;
 
     public function __construct() {
-        $this->log_file = RB_DATA_DIR . 'debug.log';
+        $this->log_file = SPRB_DATA_DIR . 'debug.log';
     }
 
     public function log( $message, $level = 'info' ) {
@@ -22,7 +22,7 @@ class Remote_Backup_Logger {
 
         // Rotate if over 500 KB.
         if ( file_exists( $this->log_file ) && filesize( $this->log_file ) > 512000 ) {
-            $rotated = RB_DATA_DIR . 'debug-prev.log';
+            $rotated = SPRB_DATA_DIR . 'debug-prev.log';
             if ( file_exists( $rotated ) ) {
                 wp_delete_file( $rotated );
             }

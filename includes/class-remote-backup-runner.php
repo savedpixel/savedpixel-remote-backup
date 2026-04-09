@@ -38,7 +38,7 @@ class Remote_Backup_Runner {
         if ( ! $this->storage->is_writable() ) {
             $this->log( 'Storage directory not writable', 'error' );
             $this->set_progress( 'failed' );
-            return new WP_Error( 'rb_storage', 'Backup storage directory is not writable.' );
+            return new WP_Error( 'sprb_storage', 'Backup storage directory is not writable.' );
         }
 
         $id        = gmdate( 'Ymd-His' ) . '-' . wp_generate_password( 6, false );
@@ -161,8 +161,8 @@ class Remote_Backup_Runner {
         );
 
         // Purge old backups per retention settings.
-        $keep_db    = (int) get_option( 'rb_retain_db', 0 );
-        $keep_files = (int) get_option( 'rb_retain_files', 0 );
+        $keep_db    = (int) get_option( 'sprb_retain_db', 0 );
+        $keep_files = (int) get_option( 'sprb_retain_files', 0 );
         if ( $keep_db > 0 || $keep_files > 0 ) {
             $purged = $this->storage->purge_beyond_retention( $keep_db, $keep_files );
             if ( $purged > 0 ) {
@@ -227,11 +227,11 @@ class Remote_Backup_Runner {
             ),
             $sizes
         );
-        set_transient( 'rb_backup_progress', $data, 600 );
+        set_transient( 'sprb_backup_progress', $data, 600 );
     }
 
     public function get_progress() {
-        $data = get_transient( 'rb_backup_progress' );
+        $data = get_transient( 'sprb_backup_progress' );
         if ( is_array( $data ) ) {
             return $data;
         }
@@ -252,12 +252,12 @@ class Remote_Backup_Runner {
 
         $tables = $wpdb->get_col( 'SHOW TABLES' );
         if ( empty( $tables ) ) {
-            return new WP_Error( 'rb_db', 'No database tables found.' );
+            return new WP_Error( 'sprb_db', 'No database tables found.' );
         }
 
         $gz = gzopen( $path, 'wb9' );
         if ( ! $gz ) {
-            return new WP_Error( 'rb_db', 'Failed to open gzip stream for database dump.' );
+            return new WP_Error( 'sprb_db', 'Failed to open gzip stream for database dump.' );
         }
 
         foreach ( $tables as $table ) {
@@ -307,7 +307,7 @@ class Remote_Backup_Runner {
         $filename = "files-{$id}.zip";
         $path     = $this->storage->artifact_path( $filename );
         $base_dir = trailingslashit( ABSPATH );
-        $exclude  = array( RB_STORAGE_DIR, RB_BASE_DIR, $base_dir . '.git/' );
+        $exclude  = array( SPRB_STORAGE_DIR, SPRB_BASE_DIR, $base_dir . '.git/' );
         $files    = array();
 
         if ( ! empty( $folders ) ) {
@@ -380,7 +380,7 @@ class Remote_Backup_Runner {
 
     private function resolve_file_folders( $folders = array() ) {
         if ( empty( $folders ) ) {
-            $folders = get_option( 'rb_backup_folders', array() );
+            $folders = get_option( 'sprb_backup_folders', array() );
         }
 
         if ( ! is_array( $folders ) ) {
@@ -405,7 +405,7 @@ class Remote_Backup_Runner {
         $files       = array();
 
         $this->collect_directory_files( $plugins_dir, 'plugins/', $files, array(
-            RB_STORAGE_DIR,
+            SPRB_STORAGE_DIR,
         ) );
 
         return $this->create_zip_archive( $path, $files, WP_CONTENT_DIR . '/', 'plugins backup' );
@@ -415,12 +415,12 @@ class Remote_Backup_Runner {
 
     private function create_zip_archive( $path, $files, $remove_root, $context ) {
         if ( empty( $files ) ) {
-            return new WP_Error( 'rb_zip', 'No files were available to archive.' );
+            return new WP_Error( 'sprb_zip', 'No files were available to archive.' );
         }
 
         $backend = $this->available_zip_backend();
         if ( ! $backend ) {
-            return new WP_Error( 'rb_zip', 'No ZIP backend is available. Enable the PHP ZipArchive extension, install the zip binary, or allow the WordPress PclZip fallback.' );
+            return new WP_Error( 'sprb_zip', 'No ZIP backend is available. Enable the PHP ZipArchive extension, install the zip binary, or allow the WordPress PclZip fallback.' );
         }
 
         if ( 'ziparchive' !== $backend ) {
@@ -462,7 +462,7 @@ class Remote_Backup_Runner {
     private function create_zip_with_ziparchive( $path, $files ) {
         $zip = new ZipArchive();
         if ( true !== $zip->open( $path, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
-            return new WP_Error( 'rb_zip', 'Failed to create ZIP archive.' );
+            return new WP_Error( 'sprb_zip', 'Failed to create ZIP archive.' );
         }
 
         foreach ( $files as $archive_path => $source_path ) {
@@ -480,12 +480,12 @@ class Remote_Backup_Runner {
     private function create_zip_with_shell( $path, $files, $remove_root ) {
         $zip_binary = $this->zip_binary_path();
         if ( ! $zip_binary ) {
-            return new WP_Error( 'rb_zip', 'The zip command is not available on this server.' );
+            return new WP_Error( 'sprb_zip', 'The zip command is not available on this server.' );
         }
 
-        $list_file = wp_tempnam( 'rb-zip-list' );
+        $list_file = wp_tempnam( 'sprb-zip-list' );
         if ( ! $list_file ) {
-            return new WP_Error( 'rb_zip', 'Failed to create a temporary file list for the ZIP archive.' );
+            return new WP_Error( 'sprb_zip', 'Failed to create a temporary file list for the ZIP archive.' );
         }
 
         file_put_contents( $list_file, implode( "\n", array_keys( $files ) ) . "\n" );
@@ -502,7 +502,7 @@ class Remote_Backup_Runner {
         }
 
         if ( 0 !== $return_var || ! file_exists( $path ) ) {
-            return new WP_Error( 'rb_zip', 'The zip command failed to create the archive.' . ( ! empty( $output ) ? ' ' . trim( implode( ' ', array_slice( $output, -2 ) ) ) : '' ) );
+            return new WP_Error( 'sprb_zip', 'The zip command failed to create the archive.' . ( ! empty( $output ) ? ' ' . trim( implode( ' ', array_slice( $output, -2 ) ) ) : '' ) );
         }
 
         return array(
@@ -513,7 +513,7 @@ class Remote_Backup_Runner {
 
     private function create_zip_with_pclzip( $path, $files, $remove_root ) {
         if ( ! $this->load_pclzip() ) {
-            return new WP_Error( 'rb_zip', 'The WordPress PclZip library is not available.' );
+            return new WP_Error( 'sprb_zip', 'The WordPress PclZip library is not available.' );
         }
 
         $archive = new PclZip( $path );
@@ -525,7 +525,7 @@ class Remote_Backup_Runner {
 
         if ( 0 === $result || ! file_exists( $path ) ) {
             $message = method_exists( $archive, 'errorInfo' ) ? $archive->errorInfo( true ) : 'Unknown PclZip error.';
-            return new WP_Error( 'rb_zip', 'PclZip failed to create the archive. ' . trim( (string) $message ) );
+            return new WP_Error( 'sprb_zip', 'PclZip failed to create the archive. ' . trim( (string) $message ) );
         }
 
         return array(

@@ -12,9 +12,9 @@ class Remote_Backup_Scheduler {
     /** @var Remote_Provider[] */
     private $providers = array();
 
-    const CRON_HOOK          = 'rb_scheduled_backup';
-    const CRON_HOOK_DATABASE = 'rb_scheduled_backup_database';
-    const CRON_HOOK_FILES    = 'rb_scheduled_backup_files';
+    const CRON_HOOK          = 'sprb_scheduled_backup';
+    const CRON_HOOK_DATABASE = 'sprb_scheduled_backup_database';
+    const CRON_HOOK_FILES    = 'sprb_scheduled_backup_files';
 
     public function __construct( Remote_Backup_Runner $runner, Remote_Backup_Logger $logger, Remote_Backup_Storage $storage ) {
         $this->runner  = $runner;
@@ -57,15 +57,15 @@ class Remote_Backup_Scheduler {
      * Get the stored protocol key.
      */
     public function get_active_protocol(): string {
-        return sanitize_text_field( (string) get_option( 'rb_remote_protocol', 'ssh' ) );
+        return sanitize_text_field( (string) get_option( 'sprb_remote_protocol', 'ssh' ) );
     }
 
     public function add_schedules( $schedules ) {
-        $schedules['rb_every_6h'] = array(
+        $schedules['sprb_every_6h'] = array(
             'interval' => 6 * HOUR_IN_SECONDS,
             'display'  => 'Every 6 hours',
         );
-        $schedules['rb_every_12h'] = array(
+        $schedules['sprb_every_12h'] = array(
             'interval' => 12 * HOUR_IN_SECONDS,
             'display'  => 'Every 12 hours',
         );
@@ -73,7 +73,7 @@ class Remote_Backup_Scheduler {
     }
 
     public function run_legacy_scheduled() {
-        $scope = get_option( 'rb_scheduled_scope', 'both' );
+        $scope = get_option( 'sprb_scheduled_scope', 'both' );
         if ( in_array( $scope, array( 'database', 'files' ), true ) ) {
             $this->run_scheduled_scope( $scope );
             return;
@@ -92,7 +92,7 @@ class Remote_Backup_Scheduler {
     }
 
     private function run_scheduled_scope( $scope ) {
-        $remote_mode = $this->normalize_remote_mode( get_option( "rb_scheduled_remote_mode_{$scope}", 'remote' ) );
+        $remote_mode = $this->normalize_remote_mode( get_option( "sprb_scheduled_remote_mode_{$scope}", 'remote' ) );
         $this->logger->log( "Scheduled backup started — scope: {$scope}, delivery: {$remote_mode}" );
 
         $result = $this->runner->run( $scope );
@@ -282,7 +282,7 @@ class Remote_Backup_Scheduler {
             return $schedule['configured_time'];
         }
 
-        return $this->sanitize_schedule_time( get_option( 'rb_schedule_time', '02:00' ) );
+        return $this->sanitize_schedule_time( get_option( 'sprb_schedule_time', '02:00' ) );
     }
 
     public function get_schedule_weekday( $scope = null ) {
@@ -305,7 +305,7 @@ class Remote_Backup_Scheduler {
 
     public function sanitize_schedule_frequency( $value ) {
         $value   = sanitize_text_field( (string) $value );
-        $allowed = array( 'none', 'hourly', 'rb_every_6h', 'rb_every_12h', 'daily', 'twicedaily', 'weekly' );
+        $allowed = array( 'none', 'hourly', 'sprb_every_6h', 'sprb_every_12h', 'daily', 'twicedaily', 'weekly' );
 
         return in_array( $value, $allowed, true ) ? $value : 'none';
     }
@@ -363,30 +363,30 @@ class Remote_Backup_Scheduler {
 
     private function get_scope_schedule( $scope ) {
         $scope          = $this->normalize_scope( $scope );
-        $frequency_key  = 'rb_schedule_' . $scope . '_frequency';
-        $time_key       = 'rb_schedule_' . $scope . '_time';
-        $weekday_key    = 'rb_schedule_' . $scope . '_weekday';
-        $frequency_raw  = get_option( $frequency_key, '__rb_missing__' );
-        $time_raw       = get_option( $time_key, '__rb_missing__' );
-        $weekday_raw    = get_option( $weekday_key, '__rb_missing__' );
+        $frequency_key  = 'sprb_schedule_' . $scope . '_frequency';
+        $time_key       = 'sprb_schedule_' . $scope . '_time';
+        $weekday_key    = 'sprb_schedule_' . $scope . '_weekday';
+        $frequency_raw  = get_option( $frequency_key, '__sprb_missing__' );
+        $time_raw       = get_option( $time_key, '__sprb_missing__' );
+        $weekday_raw    = get_option( $weekday_key, '__sprb_missing__' );
         $legacy         = $this->legacy_scope_schedule( $scope );
-        $frequency      = '__rb_missing__' === $frequency_raw ? $legacy['frequency'] : $this->sanitize_schedule_frequency( $frequency_raw );
-        $weekday        = '__rb_missing__' === $weekday_raw
+        $frequency      = '__sprb_missing__' === $frequency_raw ? $legacy['frequency'] : $this->sanitize_schedule_frequency( $frequency_raw );
+        $weekday        = '__sprb_missing__' === $weekday_raw
             ? $this->scheduled_scope_weekday( $scope, $legacy['configured_weekday'] ?? $this->default_schedule_weekday() )
             : $this->sanitize_schedule_weekday( $weekday_raw );
 
         return array(
             'scope'           => $scope,
             'frequency'       => $frequency,
-            'configured_time' => '__rb_missing__' === $time_raw ? $legacy['configured_time'] : $this->sanitize_schedule_time( $time_raw ),
+            'configured_time' => '__sprb_missing__' === $time_raw ? $legacy['configured_time'] : $this->sanitize_schedule_time( $time_raw ),
             'configured_weekday' => 'weekly' === $frequency ? $weekday : null,
         );
     }
 
     private function legacy_scope_schedule( $scope ) {
-        $legacy_scope = sanitize_text_field( (string) get_option( 'rb_scheduled_scope', 'both' ) );
-        $legacy_freq  = $this->sanitize_schedule_frequency( get_option( 'rb_schedule_frequency', 'none' ) );
-        $legacy_time  = $this->sanitize_schedule_time( get_option( 'rb_schedule_time', '02:00' ) );
+        $legacy_scope = sanitize_text_field( (string) get_option( 'sprb_scheduled_scope', 'both' ) );
+        $legacy_freq  = $this->sanitize_schedule_frequency( get_option( 'sprb_schedule_frequency', 'none' ) );
+        $legacy_time  = $this->sanitize_schedule_time( get_option( 'sprb_schedule_time', '02:00' ) );
 
         if ( 'database' === $scope ) {
             $enabled = in_array( $legacy_scope, array( 'database', 'both' ), true );
